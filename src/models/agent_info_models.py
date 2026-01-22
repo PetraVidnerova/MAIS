@@ -27,6 +27,205 @@ class Tipping():
     EXT = 10
 
 
+class RumourModel(SimulationEngine):
+    states = [
+        STATES.S,
+        STATES.I,
+        STATES.R,
+        STATES.EXT
+    ]
+
+    num_states = len(states)
+    state_str_dict = {
+        STATES.S: "S",
+        STATES.I: "I",
+        STATES.R: "R",
+        STATES.EXT: "EXT"
+    }
+    ext_code = STATES.EXT
+
+    
+    transitions = [
+        (STATES.S, STATES.I),
+        (STATES.I, STATES.R)
+    ]
+
+    num_transitions = len(transitions)
+
+    final_states = [
+        STATES.R
+    ]
+
+    invisible_states = [
+        STATES.EXT
+    ]
+
+    unstable_states = [
+        STATES.I
+    ]
+
+    fixed_model_parameters = {
+        "I_duration": (1, "time in the I state"),
+        "beta": (0,  "rate of transmission (exposure)"),
+        "scale": (1.0, "scale of tanh")
+    }
+
+    def inicialization(self):
+        super().inicialization()
+        
+
+    def setup_series_and_time_keeping(self):
+
+        super().setup_series_and_time_keeping()
+
+
+    def states_and_counts_init(self, ext_nodes=None, ext_code=None):
+        super().states_and_counts_init(ext_nodes, ext_code)
+
+        # need_check - state that needs regular checkup
+        self.need_check = self.memberships[STATES.S]
+
+        self.update_plan(np.ones(self.num_nodes, dtype=bool))
+
+    def prob_of_contact(self, source_state, dest_state, beta, scale):
+        """
+        Evaluates if transition happens.
+        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
+        :returns list of nodes (possibly with duplicates) that are exposed
+        """ 
+
+        # source_states - states that can be infected
+        # dest_states - states that are infectious
+
+        main_s = time.time()
+        
+        # is source in feasible state?
+        is_relevant_source = self.memberships[source_state, self.graph.e_source, 0]
+        
+        # is dest in feasible state?
+        is_relevant_dest = self.memberships[dest_state, self.graph.e_dest, 0]
+        
+        is_relevant_edge = np.logical_and(
+            is_relevant_source,
+            is_relevant_dest
+        )
+
+        assert type(beta) == float
+
+        relevant_sources = self.graph.e_source[is_relevant_edge]
+
+        N = self.graph.number_of_nodes 
+        counts = np.bincount(relevant_sources, minlength=N)
+
+        print(len(counts), self.memberships.shape[1], N)
+        assert len(counts) == self.memberships.shape[1] == N 
+        
+        r = np.random.rand(N)
+        # for all nodes, even those who are not relevant! for now  
+        is_exposed = r < beta * np.tanh(counts/scale) #np.log(counts+1)/beta 
+        
+        exposed_nodes = np.arange(N)[is_exposed]
+
+        main_e = time.time()
+        logging.info(f"PROBS OF CONTACT {main_e - main_s}")
+        return exposed_nodes
+
+    
+    def prob_of_contact_classic(self, source_state, dest_state, beta):
+        """
+        Evaluates if transition happens.
+        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
+        :returns list of nodes (possibly with duplicates) that are exposed
+        """ 
+
+        # source_states - states that can be infected
+        # dest_states - states that are infectious
+
+        main_s = time.time()
+        
+        # is source in feasible state?
+        is_relevant_source = self.memberships[source_state, self.graph.e_source, 0]
+        
+        # is dest in feasible state?
+        is_relevant_dest = self.memberships[dest_state, self.graph.e_dest, 0]
+        
+        is_relevant_edge = np.logical_and(
+            is_relevant_source,
+            is_relevant_dest
+        )
+
+        assert type(beta) == float
+
+        relevant_sources = self.graph.e_source[is_relevant_edge]
+        relevant_dests = self.graph.e_dest[is_relevant_edge]
+
+        # len(relevant_sources) == len(relevant_dests) --> for each edge that must be considered take source and dest
+        # for each such edge draw a random number a test if < beta ==> get exposed nodes (the ones that are exposed at least once)
+
+        num_relevant_edges = is_relevant_edge.sum() 
+        r = np.random.rand(num_relevant_edges) 
+        is_exposed = r < beta # for each relevant edge if transmission happens 
+
+        is_exposed = is_exposed.ravel()
+        
+        exposed_nodes = relevant_sources[is_exposed]
+        
+        main_e = time.time()
+        logging.info(f"PROBS OF CONTACT {main_e - main_s}")
+        return exposed_nodes
+
+
+    def daily_update(self, nodes):
+        """
+        Everyday checkup
+        """
+
+        # S
+        target_nodes = self._get_target_nodes(nodes, STATES.S)      
+
+        # try infection 
+        exposed_nodes = self.prob_of_contact(
+            STATES.S,
+            STATES.I,  
+            self.beta,
+            self.scale
+        ).flatten()
+
+            
+        self.time_to_go[exposed_nodes] = 1
+        self.state_to_go[exposed_nodes] = STATES.I
+
+
+    def update_plan(self, nodes):
+        """ This is done for nodes that  just changed their states.
+        New plans are generated according the state."""
+
+        # STATES.S:     "S",
+        target_nodes = self._get_target_nodes(nodes, STATES.S)
+        
+        self.time_to_go[target_nodes] = -1
+        self.state_to_go[target_nodes] = STATES.S
+        self.need_check[target_nodes] = True
+
+        # STATES.I:   "I"
+        target_nodes = self._get_target_nodes(nodes, STATES.I)
+        self.time_to_go[target_nodes] = self.I_duration 
+        self.state_to_go[target_nodes] = STATES.R
+        self.need_check[target_nodes] = False
+
+        # STATES.R:   "R",
+        target_nodes = self._get_target_nodes(nodes, STATES.R)
+        self.time_to_go[target_nodes] = -1
+        self.state_to_go[target_nodes] = -1
+        self.need_check[target_nodes] = False
+
+
+
+    def run_iteration(self):
+        super().run_iteration()
+
+    
+
 class InfoSIRModel(SimulationEngine):
     states = [
         STATES.S,
@@ -194,7 +393,7 @@ class InfoSIRModel(SimulationEngine):
         exposed_mask = np.zeros(self.num_nodes, dtype=bool)
         exposed_mask[target_nodes] = (exposed == 1)
 
-        print("Počet nakažených",  exposed_mask.sum())
+        print("Number of infected",  exposed_mask.sum())
         if exposed_mask.sum() > 0:
             print(exposed_mask)
             

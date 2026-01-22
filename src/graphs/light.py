@@ -47,7 +47,7 @@ class LightGraph:
     def read_csv(self,
                  path_to_nodes='p.csv',
                  path_to_external=None,
-                 path_to_layers='etypes.csv',
+                 path_to_layers=None,
                  path_to_edges='edges.csv',
                  path_to_quarantine=None,
                  path_to_layer_groups=None):
@@ -55,8 +55,22 @@ class LightGraph:
         csv_hacking = {'na_values': 'undef', 'skipinitialspace': True}
         base_nodes = pd.read_csv(
             path_to_nodes, **csv_hacking).drop_duplicates().reset_index()
+        
         edges = pd.read_csv(path_to_edges, **csv_hacking)
-        layers = pd.read_csv(path_to_layers, **csv_hacking)
+        # ensure columns - for backward compatibility with model-M
+        if "layer" not in edges.columns:
+            edges["layer"] = 1
+        if "sublayer" not in edges.columns:
+            edges["sublayer"] = 0
+        if "probability" not in edges.columns:
+            edges["probability"] = 1.0
+        if "intensity" not in edges.columns:
+            edges["intensity"] = 1.0
+        if path_to_layers is None:
+            layers = pd.DataFrame([{"id": 0, "name": "no_layer", "weight": 1.0},
+                                   {"id": 1, "name": "default", "weight": 1.0}])
+        else:   
+            layers = pd.read_csv(path_to_layers, **csv_hacking)
         if path_to_external is not None:
             external_nodes = pd.read_csv(path_to_external, **csv_hacking)
         else:
@@ -120,10 +134,10 @@ class LightGraph:
         self.num_nodes = len(self.nodes)
         self.num_base_nodes = len(base_nodes)
 
-        if self.num_nodes > 65535:
+        """ if self.num_nodes > 65535:
             raise ValueError(
                 "Number of nodes too high (we are using unit16, change it to unit32 for higher numbers of nodes.")
-
+ """
         #        self.ignored = set(external_nodes["id"])
 
         # edges
@@ -136,12 +150,12 @@ class LightGraph:
         # fill edges to a graph
         n_edges = len(edges)
         # edges data"
-        self.e_types = np.empty(n_edges, dtype="int16")
-        self.e_subtypes = np.empty(n_edges, dtype="int16")
+        self.e_types = np.empty(n_edges, dtype="uint32")
+        self.e_subtypes = np.empty(n_edges, dtype="uint32")
         self.e_probs = np.empty(n_edges, dtype="float32")
         self.e_intensities = np.empty(n_edges, dtype="float32")
-        self.e_source = np.empty(n_edges, dtype="uint16")
-        self.e_dest = np.empty(n_edges, dtype="uint16")
+        self.e_source = np.empty(n_edges, dtype="uint32")
+        self.e_dest = np.empty(n_edges, dtype="uint32")
         self.e_active = np.ones(n_edges, dtype="bool")
 
         # if value == 2 than is valid, other numbers prob in quarantine

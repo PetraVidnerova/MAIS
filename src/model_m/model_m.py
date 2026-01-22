@@ -6,6 +6,7 @@ from utils.config_utils import ConfigFile
 
 from graphs.graph_gen import GraphGenerator, CSVGraphGenerator, RandomSingleGraphGenerator
 from graphs.light import LightGraph
+from graphs.simple import SimpleGraph
 from models.model_zoo import model_zoo
 from models.states import STATES
 
@@ -213,7 +214,7 @@ class ModelM():
         self.model.save_node_states(filename)
 
     def init_matrix(self):
-        if isinstance(self.graph, LightGraph):
+        if isinstance(self.graph, LightGraph) or isinstance(self.graph, SimpleGraph):
             #            raise NotImplementedError(
             #                "LighGraph not  supported at the moment, waits for fixes.")
             return self.graph
@@ -244,7 +245,7 @@ def load_graph(cf: ConfigFile):
     filename = cf_graph.get("file", None)
     nodes = cf_graph.get("nodes", "nodes.csv")
     edges = cf_graph.get("edges", "edges.csv")
-    layers = cf_graph.get("layers", "etypes.csv")
+    layers = cf_graph.get("layers", None)
     externals = cf_graph.get("externals", None)
     quarantine = cf_graph.get("quarantine", None)
     layer_groups = cf_graph.get("layer_groups", None)
@@ -272,6 +273,10 @@ def load_graph(cf: ConfigFile):
                    path_to_layers=layers,
                    path_to_quarantine=quarantine,
                    path_to_layer_groups=layer_groups)
+        
+    elif graph_type == "simple":
+        g = SimpleGraph()
+        g.read_csv(path_to_edges=edges)
 
     elif graph_type == "random":
         raise NotImplementedError(
@@ -285,7 +290,7 @@ def load_graph(cf: ConfigFile):
                 if g.A_valid:
                     print("Wow, matrix A is ready.")
             else:
-                assert isinstance(g, LightGraph), f"Something weird ({type(g)}) was loaded."
+                assert isinstance(g, LightGraph) or isinstance(g, SimpleGraph), f"Something weird ({type(g)}) was loaded."
     else:
         raise ValueError(f"Graph {graph_type} not available.")
 
