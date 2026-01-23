@@ -188,7 +188,7 @@ class RumourModelInfo(RumourModel):
         "scale": (1, "scaling factor for the exposure probability")
     }
     
-    def prob_of_contact(self, source_state, dest_state, beta, scale):
+    def prob_of_contact(self, source_state, dest_state, beta):
         """
         Evaluates if transition happens.
         Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
@@ -223,7 +223,7 @@ class RumourModelInfo(RumourModel):
         
         r = np.random.rand(N)
         # for all nodes, even those who are not relevant! for now  
-        is_exposed = r < beta * np.tanh(counts/scale) #np.log(counts+1)/beta 
+        is_exposed = r < beta * np.tanh(counts/self.scale) #np.log(counts+1)/beta 
         
         exposed_nodes = np.arange(N)[is_exposed]
 
@@ -364,7 +364,7 @@ class InfoSIRModel(SimulationEngine):
         
         exposed_nodes = relevant_sources[is_exposed]
         
-        print(exposed_nodes)
+        #print(exposed_nodes)
         
         ret = np.zeros((self.num_nodes, 1))
         ret[exposed_nodes] = 1

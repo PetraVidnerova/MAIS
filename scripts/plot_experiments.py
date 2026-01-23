@@ -155,14 +155,15 @@ def run(plot_files, label_names, out_file, fit_me, show_whole_fit, title, column
     if label_names is not None:
         label_names = label_names.split(',')
     else:
-        def clean_name(filename):
-            filename = filename.split('/')[-1]
-            filename = filename[::-1].split(".", 1)[-1][::-1]  # removes last suffix
-            return filename.replace("history", "").replace("MODEL","")
-        label_names = list(map(
-            lambda x: clean_name(x),
-            plot_files
-        ))
+        pass
+        # def clean_name(filename):
+        #     filename = filename.split('/')[-1]
+        #     filename = filename[::-1].split(".", 1)[-1][::-1]  # removes last suffix
+        #     return filename.replace("history", "").replace("MODEL","")
+        # label_names = list(map(
+        #     lambda x: clean_name(x),
+        #     plot_files
+        # ))
 
     if day_indices is not None or day_labels is not None:
         assert day_indices is not None and day_labels is not None, "Both --day_indices and --day_labels must be " \
