@@ -13,5 +13,5 @@ done
 LABELS=`echo $LABELS | sed 's/^,//g' | eval sed 's/history_${EXP_ID}_//g'`
 
 uv run plot_experiments.py $FILENAMES --label_names $LABELS --out_file ${EXP_ID}.png --column ${COLUMN} --fit_me ../data/fit_data/retweets.csv --ymax 40000
-#python plot_experiments.py $FILENAMES --out_file ${EXP_ID}.png --column ${COLUMN} --fit_me ../data/fit_data/retweets.csv --ymax 40000
+#uv run plot_experiments.py $FILENAMES --out_file ${EXP_ID}.png --column ${COLUMN} --fit_me ../data/fit_data/retweets.csv --ymax 40000
 #geeqie ${EXP_ID}.png
