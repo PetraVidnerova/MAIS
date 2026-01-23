@@ -66,8 +66,7 @@ class RumourModel(SimulationEngine):
 
     fixed_model_parameters = {
         "I_duration": (1, "time in the I state"),
-        "beta": (0,  "rate of transmission (exposure)"),
-        "scale": (1.0, "scale of tanh")
+        "beta": (0,  "rate of transmission (exposure)")
     }
 
     def inicialization(self):
@@ -87,51 +86,8 @@ class RumourModel(SimulationEngine):
 
         self.update_plan(np.ones(self.num_nodes, dtype=bool))
 
-    def prob_of_contact(self, source_state, dest_state, beta, scale):
-        """
-        Evaluates if transition happens.
-        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
-        :returns list of nodes (possibly with duplicates) that are exposed
-        """ 
-
-        # source_states - states that can be infected
-        # dest_states - states that are infectious
-
-        main_s = time.time()
-        
-        # is source in feasible state?
-        is_relevant_source = self.memberships[source_state, self.graph.e_source, 0]
-        
-        # is dest in feasible state?
-        is_relevant_dest = self.memberships[dest_state, self.graph.e_dest, 0]
-        
-        is_relevant_edge = np.logical_and(
-            is_relevant_source,
-            is_relevant_dest
-        )
-
-        assert type(beta) == float
-
-        relevant_sources = self.graph.e_source[is_relevant_edge]
-
-        N = self.graph.number_of_nodes 
-        counts = np.bincount(relevant_sources, minlength=N)
-
-        print(len(counts), self.memberships.shape[1], N)
-        assert len(counts) == self.memberships.shape[1] == N 
-        
-        r = np.random.rand(N)
-        # for all nodes, even those who are not relevant! for now  
-        is_exposed = r < beta * np.tanh(counts/scale) #np.log(counts+1)/beta 
-        
-        exposed_nodes = np.arange(N)[is_exposed]
-
-        main_e = time.time()
-        logging.info(f"PROBS OF CONTACT {main_e - main_s}")
-        return exposed_nodes
-
     
-    def prob_of_contact_classic(self, source_state, dest_state, beta):
+    def prob_of_contact(self, source_state, dest_state, beta):
         """
         Evaluates if transition happens.
         Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
@@ -188,7 +144,6 @@ class RumourModel(SimulationEngine):
             STATES.S,
             STATES.I,  
             self.beta,
-            self.scale
         ).flatten()
 
             
@@ -225,6 +180,56 @@ class RumourModel(SimulationEngine):
         super().run_iteration()
 
     
+class RumourModelInfo(RumourModel):
+
+    fixed_model_parameters = {
+        "I_duration": (1, "time in the I state"),
+        "beta": (0,  "rate of transmission (exposure)"),
+        "scale": (1, "scaling factor for the exposure probability")
+    }
+    
+    def prob_of_contact(self, source_state, dest_state, beta, scale):
+        """
+        Evaluates if transition happens.
+        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
+        :returns list of nodes (possibly with duplicates) that are exposed
+        """ 
+
+        # source_states - states that can be infected
+        # dest_states - states that are infectious
+
+        main_s = time.time()
+        
+        # is source in feasible state?
+        is_relevant_source = self.memberships[source_state, self.graph.e_source, 0]
+        
+        # is dest in feasible state?
+        is_relevant_dest = self.memberships[dest_state, self.graph.e_dest, 0]
+        
+        is_relevant_edge = np.logical_and(
+            is_relevant_source,
+            is_relevant_dest
+        )
+
+        assert type(beta) == float
+
+        relevant_sources = self.graph.e_source[is_relevant_edge]
+
+        N = self.graph.number_of_nodes 
+        counts = np.bincount(relevant_sources, minlength=N)
+
+        print(len(counts), self.memberships.shape[1], N)
+        assert len(counts) == self.memberships.shape[1] == N 
+        
+        r = np.random.rand(N)
+        # for all nodes, even those who are not relevant! for now  
+        is_exposed = r < beta * np.tanh(counts/scale) #np.log(counts+1)/beta 
+        
+        exposed_nodes = np.arange(N)[is_exposed]
+
+        main_e = time.time()
+        logging.info(f"PROBS OF CONTACT {main_e - main_s}")
+        return exposed_nodes
 
 class InfoSIRModel(SimulationEngine):
     states = [
