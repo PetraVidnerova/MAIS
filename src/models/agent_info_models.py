@@ -218,7 +218,7 @@ class RumourModelInfo(RumourModel):
         N = self.graph.number_of_nodes 
         counts = np.bincount(relevant_sources, minlength=N)
 
-        print(len(counts), self.memberships.shape[1], N)
+        #print(len(counts), self.memberships.shape[1], N)
         assert len(counts) == self.memberships.shape[1] == N 
         
         r = np.random.rand(N)
