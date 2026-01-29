@@ -185,7 +185,8 @@ class RumourModelInfo(RumourModel):
     fixed_model_parameters = {
         "I_duration": (1, "time in the I state"),
         "beta": (0,  "rate of transmission (exposure)"),
-        "scale": (1, "scaling factor for the exposure probability")
+        "scale": (1, "scaling factor for the exposure probability"),
+        "t_event": (0, "time of the event that increases the spread")
     }
     
     def prob_of_contact(self, source_state, dest_state, beta):
@@ -213,6 +214,9 @@ class RumourModelInfo(RumourModel):
 
         assert type(beta) == float
 
+        if self.t > self.t_event:
+            beta =  beta + 0.1 * np.exp(-0.06 * (self.t - self.t_event))
+       
         relevant_sources = self.graph.e_source[is_relevant_edge]
 
         N = self.graph.number_of_nodes 
@@ -230,6 +234,8 @@ class RumourModelInfo(RumourModel):
         main_e = time.time()
         logging.info(f"PROBS OF CONTACT {main_e - main_s}")
         return exposed_nodes
+
+
 
 class InfoSIRModel(SimulationEngine):
     states = [
