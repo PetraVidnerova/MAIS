@@ -1,5 +1,5 @@
 CONFIG=../config/higgs_sir.ini
-EXP_ID=higgs_event14
+EXP_ID=higgs_event21
 COLUMN=inc_I
 
 FILENAMES=""

@@ -185,7 +185,9 @@ class RumourModelInfo(RumourModel):
     fixed_model_parameters = {
         "I_duration": (1, "time in the I state"),
         "beta": (0,  "rate of transmission (exposure)"),
+        "beta_boost": (0, "additional exposure rate after event"),
         "scale": (1, "scaling factor for the exposure probability"),
+        "decay": (0, "decay rate of the increased spread"),
         "t_event": (0, "time of the event that increases the spread")
     }
     
@@ -215,7 +217,7 @@ class RumourModelInfo(RumourModel):
         assert type(beta) == float
 
         if self.t > self.t_event:
-            beta =  beta + 0.1 * np.exp(-0.06 * (self.t - self.t_event))
+            beta =  beta + self.beta_boost * np.exp(-self.decay * (self.t - self.t_event))
        
         relevant_sources = self.graph.e_source[is_relevant_edge]
 
