@@ -1,0 +1,1 @@
+wget https://snap.stanford.edu/data/higgs-social_network.edgelist.gz -O higgs_edges.csv.gz 

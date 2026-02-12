@@ -24,9 +24,14 @@ class SimpleGraph:
                  path_to_edges='edges.csv'):
 
         csv_hacking = {'na_values': 'undef', 'skipinitialspace': True}        
-        edges = pd.read_csv(path_to_edges, **csv_hacking)
+        edges = pd.read_csv(path_to_edges, 
+                            header=None,
+                            sep=r",|\s+",
+                            engine='python',
+                            names=['vertex1', 'vertex2'],
+                            **csv_hacking)
     
-        
+
         # edges
         # drop self edges
         indexNames = edges[edges['vertex1'] == edges['vertex2']].index
