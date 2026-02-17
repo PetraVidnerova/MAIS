@@ -143,7 +143,7 @@ class RumourModel(SimulationEngine):
         exposed_nodes = self.prob_of_contact(
             STATES.S,
             STATES.I,  
-            self.beta,
+            self.lambda0,
         ).flatten()
 
             
@@ -183,12 +183,14 @@ class RumourModel(SimulationEngine):
 class RumourModelInfo(RumourModel):
 
     fixed_model_parameters = {
-        "I_duration": (1, "time in the I state"),
-        "beta": (0,  "rate of transmission (exposure)"),
-        "beta_boost": (0, "additional exposure rate after event"),
-        "scale": (1, "scaling factor for the exposure probability"),
-        "decay": (0, "decay rate of the increased spread"),
-        "t_event": (0, "time of the event that increases the spread")
+        "lambda0": (0.001, "base rate of transmission"),
+        "scale": (1.0, "scaling factor for the transmission probability"),
+        #"beta_duration": (0.5, "probability of ending the I state at each step"),
+        "I_duration": (48, "time in the I state"),
+        "t_event": (95, "time of the event that increases the spread"),
+        "event_boost": (0.02, "boost in transmission rate after event"),
+        "decay": (0.06, "decay rate of the increased spread after event"),
+        "init_I": (12, "initial number of infected nodes")
     }
     
     def prob_of_contact(self, source_state, dest_state, beta):
@@ -214,11 +216,21 @@ class RumourModelInfo(RumourModel):
             is_relevant_dest
         )
 
-        assert type(beta) == float
+        #assert type(beta) == float
 
+        # let's count lambda for all nodes, even not relevant ones 
+        time_in_I = np.zeros(self.num_nodes)
+        
+        
+
+        times = (self.I_duration - self.time_to_go[self.memberships[STATES.I].ravel() == 1]).ravel()
+        time_in_I[self.memberships[STATES.I].ravel() == 1] = times
+        lambda_ = self.lambda0 * np.exp(-self.scale * time_in_I)
+
+            
         if self.t > self.t_event:
-            beta =  beta + self.beta_boost * np.exp(-self.decay * (self.t - self.t_event))
-       
+                lambda_ += self.event_boost * np.exp(-self.decay * (self.t - self.t_event))
+                         
         relevant_sources = self.graph.e_source[is_relevant_edge]
 
         N = self.graph.number_of_nodes 
@@ -229,8 +241,8 @@ class RumourModelInfo(RumourModel):
         
         r = np.random.rand(N)
         # for all nodes, even those who are not relevant! for now  
-        is_exposed = r < beta * np.tanh(counts/self.scale) #np.log(counts+1)/beta 
-        
+        is_exposed = r <  1 - (1 - lambda_) ** counts
+
         exposed_nodes = np.arange(N)[is_exposed]
 
         main_e = time.time()
