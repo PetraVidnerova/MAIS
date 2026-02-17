@@ -89,6 +89,7 @@ def _run_models_from_config(cf: ConfigFile,
     print_interval = cf.section_as_dict("TASK").get("print_interval", 1)
     verbose = cf.section_as_dict("TASK").get("verbose", "Yes") == "Yes"
 
+    # these are some special hacks related to infection model
     if "theta" in hyperparams:
         hyperparams.update({"theta_E": hyperparams["theta"],
                             "theta_Ia": hyperparams["theta"],
@@ -100,7 +101,8 @@ def _run_models_from_config(cf: ConfigFile,
         hyperparams["beta_A"] = hyperparams["beta"] * hyperparams["a_reduction"]
         del hyperparams["a_reduction"]
 
-    hyperparams["beta_in_family"] = hyperparams["beta"]
+    if "beta" in hyperparams:
+        hyperparams["beta_in_family"] = hyperparams["beta"]
     if "beta_A" in hyperparams:
         hyperparams["beta_A_in_family"] = hyperparams["beta_A"]
 

@@ -23,7 +23,7 @@ def load_gold_data(csv_path, first_n_zeros=0, data_column=2, from_day=0, until_d
     else:
         dates = df["T"]
 
-    result = pd.DataFrame({"day": range(dates.max() + 1), "infected": pd.NA})
+    result = pd.DataFrame({"day": range(len(dates)), "infected": pd.NA})
 
     if isinstance(data_column, int):
         data_vals = df.iloc[:, data_column].to_list()
@@ -31,7 +31,8 @@ def load_gold_data(csv_path, first_n_zeros=0, data_column=2, from_day=0, until_d
         data_vals = df[data_column].to_list()
     result["infected"] = data_vals
 
-    result.fillna(method='ffill', inplace=True)
+    #result.fillna(method='ffill', inplace=True)
+    result.ffill(inplace=True)
 
     if first_n_zeros > 0:
         result["day"] += first_n_zeros

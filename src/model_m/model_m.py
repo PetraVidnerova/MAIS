@@ -114,7 +114,7 @@ class ModelM():
         if self.ready:
             raise NotImplementedError("We duplicate only newbie models")
 
-        if policy_params is not None:
+        if policy_params:
             policy_func, policy_setup = self.policy
             policy_setup = {**policy_setup, **policy_params}
             policy = policy_func, policy_setup
