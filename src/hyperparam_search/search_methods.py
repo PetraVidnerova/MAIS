@@ -10,12 +10,13 @@ from cma.optimization_tools import EvalParallel2
 from sklearn.model_selection import ParameterGrid
 import gc
 
+
 def _run_model_with_hyperparams(model_func, hyperparams, output_file=None):
     print(f"Running with hyperparams: {hyperparams}", flush=True)
 
     res = model_func(hyperparams=hyperparams)
 
-    fitness = np.mean(res["result"]) 
+    fitness = np.mean(res["result"])
     _log_inidividual(output_file, hyperparams.values(), fitness, 0)
     print(f"Finished run with hyperparams: {hyperparams}")
     return res
@@ -118,6 +119,7 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
 
     sigma = hyperparam_config["SIGMA"]
     cma_kwargs = hyperparam_config["CMA"]
+    cma_kwargs = cma_kwargs.update({"CMA_elitist": True})
 
     _init_output_file(output_file, initial_keys)
     eval_func = partial(evaluate_with_params, model_func=model_func,

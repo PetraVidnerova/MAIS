@@ -185,8 +185,8 @@ class RumourModelInfo(RumourModel):
     fixed_model_parameters = {
         "lambda0": (0.001, "base rate of transmission"),
         "scale": (1.0, "scaling factor for the transmission probability"),
-        #"beta_duration": (0.5, "probability of ending the I state at each step"),
-        "I_duration": (48, "time in the I state"),
+        "beta_duration": (0.02,"probability of ending the I state at each step"),
+        #I_duration": (48, "time in the I state"),
         "t_event": (95, "time of the event that increases the spread"),
         "event_boost": (0.02, "boost in transmission rate after event"),
         "decay": (0.06, "decay rate of the increased spread after event"),
@@ -220,10 +220,7 @@ class RumourModelInfo(RumourModel):
 
         # let's count lambda for all nodes, even not relevant ones 
         time_in_I = np.zeros(self.num_nodes)
-        
-        
-
-        times = (self.I_duration - self.time_to_go[self.memberships[STATES.I].ravel() == 1]).ravel()
+        times = self.durations[self.memberships[STATES.I].ravel() == 1].ravel()
         time_in_I[self.memberships[STATES.I].ravel() == 1] = times
         lambda_ = self.lambda0 * np.exp(-self.scale * time_in_I)
 
@@ -249,6 +246,42 @@ class RumourModelInfo(RumourModel):
         logging.info(f"PROBS OF CONTACT {main_e - main_s}")
         return exposed_nodes
 
+    def daily_update(self, nodes):
+        """
+        Everyday checkup
+        """
+        super().daily_update(nodes)
+
+        nodes_in_I = self._get_target_nodes(nodes, STATES.I)
+        r = np.random.rand(len(nodes_in_I))
+        end_I = r < self.beta_duration
+
+        self.time_to_go[nodes_in_I] = -1
+        self.time_to_go[end_I] = 1
+        self.state_to_go[end_I] = STATES.R
+
+    def update_plan(self, nodes):
+        """ This is done for nodes that  just changed their states.
+        New plans are generated according the state."""
+
+        # STATES.S:     "S",
+        target_nodes = self._get_target_nodes(nodes, STATES.S)
+        
+        self.time_to_go[target_nodes] = -1
+        self.state_to_go[target_nodes] = STATES.S
+        self.need_check[target_nodes] = True
+
+        # STATES.I:   "I"
+        target_nodes = self._get_target_nodes(nodes, STATES.I)
+        self.time_to_go[target_nodes] = -1  
+        self.state_to_go[target_nodes] = STATES.I 
+        self.need_check[target_nodes] = True
+
+        # STATES.R:   "R",
+        target_nodes = self._get_target_nodes(nodes, STATES.R)
+        self.time_to_go[target_nodes] = -1
+        self.state_to_go[target_nodes] = -1
+        self.need_check[target_nodes] = False
 
 
 class InfoSIRModel(SimulationEngine):

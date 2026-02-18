@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 
@@ -193,10 +192,10 @@ class SimulationEngine(BaseEngine):
         return ret
     
     def print(self, verbose=False):
-        print(f"T = {self.T} ({self.t})")
         if verbose:
+            print(f"T = {self.T} ({self.t})")
             for state in self.states:
-                print(f"\t {self.state_str_dict[state]} = {self.state_counts[state][self.t]}")
+                    print(f"\t {self.state_str_dict[state]} = {self.state_counts[state][self.t]}")
 
     def save_durations(self, f):
         for s in self.states:

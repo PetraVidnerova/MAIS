@@ -4,13 +4,14 @@
   "MODEL": {
     "lambda0": 0.001,
     "scale": 1.0,
+    "beta_duration": 0.00001,
     "event_boost": 0.01,
     "decay": 0.06
   },
   "param_ranges" : {
     "lambda0": [0.000001, 0.5],
     "scale": [0.001, 1.0],
-    "event_boost": [0.001, 0.1],
+    "beta_duration": [0.000001, 0.1],
     "decay": [0.01, 0.1]
   },
   "SIGMA": 2.0,
