@@ -119,7 +119,7 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
 
     sigma = hyperparam_config["SIGMA"]
     cma_kwargs = hyperparam_config["CMA"]
-    cma_kwargs = cma_kwargs.update({"CMA_elitist": True})
+    cma_kwargs.update({"CMA_elitist": True})
 
     _init_output_file(output_file, initial_keys)
     eval_func = partial(evaluate_with_params, model_func=model_func,
@@ -131,9 +131,12 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
     while not es.stop():
         X = es.ask()
 
+        print("NJOBS", n_jobs)
         with EvalParallel2(fitness_function=eval_func, number_of_processes=n_jobs) as eval_all:
             fitnesses = eval_all(X)
 
+        print("POPSIZE", len(fitnesses))
+            
         es.tell(X, fitnesses)
         es.disp()
 
