@@ -16,12 +16,28 @@ For information spread use:
       - `beta`: transmision strenght
       - `I_duration`: duration in state I in days
     - policy functions:
-      - [`Spreader`](src/policies/info_spreader.py): seeds the source of information to the node with pagerank corresponding to given quantile             
+      - [`Spreader`](src/policies/info_spreader.py): seeds the source of information to the node with pagerank corresponding to given quantile
   + [InfoTippingModel](src/models/agent_info_models.py)
     - the implementation of Tipping model
     - parameters:
         - `theta`: the threshold
-          
+  + [RumourModel](src/models/agent_info_models.py)
+    - SIR model for rumour spread on directed networks
+    - parameters:
+      - `beta`: transmission probability per contact
+      - `I_duration`: duration in state I (in hours)
+      - `init_I`: number of initially infected nodes
+  + [RumourModelInfo](src/models/agent_info_models.py)
+    - SIR model with temporal decay of infectiousness and an optional event-driven boost; designed for fitting real-world information cascades (e.g. Higgs Twitter dataset)
+    - parameters:
+      - `lambda0`: base transmission rate
+      - `scale`: decay rate of infectiousness with time spent in state I
+      - `beta_duration`: probability of spontaneous recovery per step
+      - `t_event`: time step at which an external event boosts spread
+      - `event_boost`: strength of the event boost
+      - `decay`: decay rate of the event boost
+      - `init_I`: number of initially infected nodes
+
  For infection spread use:
    + [SimulationDrivenModel](src/models/agent_based_network_model.py)
       - See the [model documentation](doc/model.md) for technical details.
@@ -54,6 +70,20 @@ Please follow the links to find out more details about the examples presented.
   Simple examples of information spread modelling using Tipping model `InfoTippingModel`.<br>
   <img src="doc/fig/demo_verona_tipping.png" width="30%"/>
   
++ Higgs Twitter – `RumourModel` <br>
+  ```console
+  cd scripts
+  source higgs_sir.sh
+  ```
+  Grid sweep of `beta` and `I_duration` for `RumourModel` on the real-world Higgs Twitter network.
+
++ Higgs Twitter – `RumourModelInfo` <br>
+  ```console
+  cd scripts
+  source higgs.sh higgs_run
+  ```
+  Simulation of information spread with temporal decay and event boost using fitted parameters.
+
 + [Demo](doc/demo.md) <br>
   Simple examples of infection transmission model using `SimulationDrivenModel`.<br>
   <img src="doc/fig/demo_tracing.png" width="30%"/>
@@ -121,6 +151,8 @@ There are several INIs provided so that you can base your experiments on these s
 |[verona_sir.ini](config/verona_sir.ini)| Information spread using SIR model on a toy graph *Verona*.|
 |[verona_tipping.ini](config/verona_tipping.ini)| Information spread using Tipping model on a toy graph *Verona*.|
 |[demo.ini](config/demo.ini)| Infection spread on a graph of a small region (5k inhabitants) for demonstration purposes.|
+|[higgs_sir.ini](config/higgs_sir.ini)| Information spread using `RumourModel` on the Higgs Twitter graph; sweeps over several `beta` and `I_duration` values.|
+|[higgs.ini](config/higgs.ini)| Information spread using `RumourModelInfo` (temporal decay + event boost) on the Higgs Twitter graph.|
 
 
 ### 1. Running your experiments
@@ -171,6 +203,69 @@ Then you can run the animation:
 python animate.py ../config/verona_ani.ini --nodes_file ../data/output/model/node_states_animation.csv
 ```
 
+
+### 5. Complete example: Higgs Twitter dataset
+
+This section walks through the full workflow for the [Higgs Twitter dataset](https://snap.stanford.edu/data/higgs-twitter.html) — a real-world graph of ~450k nodes capturing retweet activity around the discovery of the Higgs boson (July 2012).
+
+#### Step 1 – Download the graph
+
+```console
+cd data/m-input/higgs-twitter
+source download_graph.sh
+```
+
+This downloads `higgs_edges.csv.gz` from the SNAP repository. The graph is loaded and cached as `higgs_simple.pickle` on the first simulation run.
+
+#### Step 2 – (Optional) Fit model parameters with CMA-ES
+
+The `RumourModelInfo` parameters can be fitted to the observed retweet counts stored in `data/fit_data/retweets.csv`:
+
+```console
+cd scripts
+python run_search.py \
+    ../config/higgs.ini \
+    ../config/hyperparam_search/cmaes_higgs.json \
+    --fit_data ../data/fit_data/retweets.csv \
+    --fit_column I \
+    --run_n_times 3 \
+    --n_jobs 4 \
+    --out_dir ../data/output/higgs_search
+```
+
+The search optimises `lambda0`, `scale`, `beta_duration`, `event_boost`, and `decay` using CMA-ES (up to 100 000 evaluations, population size 30). Results are written to `../data/output/higgs_search/`. Copy the best-found parameters into a new INI file (e.g. `config/higgs_fitted.ini`) before the next step.
+
+#### Step 3 – Run the simulation
+
+Run 10 repetitions of the fitted model (adjust `--n_repeat` and `--n_jobs` as needed):
+
+```console
+cd scripts
+python run_multi_experiment.py \
+    -R ../config/random_seeds.txt \
+    --n_jobs 4 \
+    --n_repeat 10 \
+    ../config/higgs.ini \
+    higgs_run
+```
+
+Or use the provided convenience script (uses `higgs_fitted.ini`):
+
+```console
+cd scripts
+source higgs.sh higgs_run
+```
+
+Output ZIP files are written to `data/output/model/`.
+
+#### Step 4 – Visualise results
+
+```console
+cd scripts
+python plot_experiments.py \
+    ../data/output/model/history_higgs_run_*.zip \
+    --out_file ../data/output/higgs_result.png
+```
 
 <!--- PDF BREAK --><!--- PDF BREAK -->
 
