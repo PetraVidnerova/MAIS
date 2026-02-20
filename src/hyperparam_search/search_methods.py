@@ -119,7 +119,6 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
 
     sigma = hyperparam_config["SIGMA"]
     cma_kwargs = hyperparam_config["CMA"]
-    cma_kwargs.update({"CMA_elitist": True})
 
     _init_output_file(output_file, initial_keys)
     eval_func = partial(evaluate_with_params, model_func=model_func,
@@ -128,6 +127,9 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
     es = cma.CMAEvolutionStrategy(initial_vals, sigma, cma_kwargs)
 
     gen_n = 0
+    best_x = None
+    best_f = float('inf')
+
     while not es.stop():
         X = es.ask()
 
@@ -136,7 +138,16 @@ def cma_es(model_func, hyperparam_config: dict, return_only_best=False, output_f
             fitnesses = eval_all(X)
 
         print("POPSIZE", len(fitnesses))
-            
+        for x, f in zip(X, fitnesses):
+            if f < best_f:
+                best_f = f
+                best_x = x.copy()    
+
+        # Replace worst with elite
+        worst_idx = max(range(len(fitnesses)), key=lambda i: fitnesses[i])
+        X[worst_idx] = best_x.copy()
+        fitnesses[worst_idx] = best_f
+
         es.tell(X, fitnesses)
         es.disp()
 
