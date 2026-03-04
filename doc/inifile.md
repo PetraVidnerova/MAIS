@@ -9,7 +9,7 @@ This document lists all the sections and their keys.
 
 |key|type|default|meaning|
 |---|---|---|---|
-|duration_in_days|number|60|duration of the simulation in days|
+|duration|number|60|duration of the simulation in days|
 |print_interval|number|1|period of printing the information of numbers of nodes in individual states, in days, -1 = never print| 
 |verbose|string|Yes|Use no for no output during simulation| 
 |model|string|SimulationDrivenModel|type of model (select from InfoSIRModel, InfoTippingModel, SimulationDrivenModel; other Models are no more supported, use the at your own risk)|

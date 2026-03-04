@@ -78,7 +78,7 @@ def demo(cf, test_id=None, model_random_seed=42,  print_interval=1, n_repeat=1):
     model = load_model_from_config(cf, model_random_seed)
 
     # run parameters
-    ndays = cf.section_as_dict("TASK").get("duration_in_days", 60)
+    ndays = cf.section_as_dict("TASK").get("duration", 60)
     print_interval = cf.section_as_dict("TASK").get("print_interval", 1)
     verbose = cf.section_as_dict("TASK").get("verbose", "Yes") == "Yes"
     monitor_node = cf.section_as_dict("TASK").get("monitor_node", None)

@@ -35,7 +35,7 @@ def run_hyperparam_search(model_config: str,
 
         start_day: Starting day for the experiment - if None, use `start_day` from the model config.
 
-        n_days: Number of days to run the experiment. If None, use `duration_in_days` from the model confing or 60 if
+        n_days: Number of days to run the experiment. If None, use `duration` from the model confing or 60 if
             not set.
 
         return_func: String key of return function from `utils.eval_model`
@@ -85,7 +85,7 @@ def _run_models_from_config(cf: ConfigFile,
                             return_func: str = None,
                             return_func_kwargs: Dict = None):
     # copy model
-    ndays = n_days if n_days is not None else cf.section_as_dict("TASK").get("duration_in_days", 60)
+    ndays = n_days if n_days is not None else cf.section_as_dict("TASK").get("duration", 60)
     print_interval = cf.section_as_dict("TASK").get("print_interval", 1)
     verbose = cf.section_as_dict("TASK").get("verbose", "Yes") == "Yes"
 

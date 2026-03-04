@@ -1,10 +1,9 @@
-CONFIG=../config/higgs_sir.ini
-EXP_ID=higgs_event21
+EXP_ID=test_higgs
 COLUMN=inc_I
 
 FILENAMES=""
 LABELS=""
-for FILE in `ls ../data/output/model/history_${EXP_ID}_*.zip`
+for FILE in `ls ../data/output/model/history_${EXP_ID}*.zip`
 do
     FILENAMES="$FILENAMES $FILE"
     LABEL=`basename $FILE .zip`

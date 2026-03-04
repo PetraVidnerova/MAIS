@@ -42,7 +42,7 @@ def load_model_from_config(cf: ConfigFile,
     if use_policy:
         load_policy(cf, graph, use_policy)
 
-    ndays = cf.section_as_dict("TASK").get("duration_in_days", 60)
+    ndays = cf.section_as_dict("TASK").get("duration", 60)
     print_interval = cf.section_as_dict("TASK").get("print_interval", 1)
     verbose = cf.section_as_dict("TASK").get("verbose", "Yes") == "Yes"
 
