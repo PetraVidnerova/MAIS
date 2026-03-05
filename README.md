@@ -325,6 +325,7 @@ Output ZIP files are written to `data/output/model/`.
 cd scripts
 python plot_experiments.py \
     ../data/output/model/history_higgs_run_*.zip \
+    --column inc_I \
     --out_file ../data/output/higgs_result.png
 ```
 
