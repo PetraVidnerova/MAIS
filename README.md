@@ -314,7 +314,7 @@ Or use the provided convenience script (uses `higgs_fitted.ini`):
 
 ```console
 cd scripts
-source higgs.sh higgs_run
+source higgs.sh 
 ```
 
 Output ZIP files are written to `data/output/model/`.
