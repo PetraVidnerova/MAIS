@@ -345,5 +345,5 @@ python plot_experiments.py \
 ## Configuration and Advanced Features
 
 Please consult [How to run simulations](doc/run.md) for options of individual scripts,
-[INI file specification](doc/inifile.md), and [How to fit the paremeters](doc/run.md#6-fitting-your-model).
+[INI file specification](doc/inifile.md), and [How to fit the parameters](doc/run.md#6-fitting-your-model).
 
