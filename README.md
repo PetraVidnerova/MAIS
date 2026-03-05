@@ -288,8 +288,8 @@ python run_search.py \
     ../config/higgs.ini \
     ../config/hyperparam_search/cmaes_higgs.json \
     --fit_data ../data/fit_data/retweets.csv \
-    --fit_column I \
-    --run_n_times 3 \
+    --fit_column inc_I \
+    --run_n_times 10 \
     --n_jobs 4 \
     --out_dir ../data/output/higgs_search
 ```
