@@ -6,14 +6,14 @@
 
 <!--- PDF BREAK -->
 
-The MAIS Model is a collection of agent based network models for simulation of information or infection spread. 
-You can use your own network (graph) or play with demo graphs included in this repository. You can derive your own models with customised set of agent states or encode customised policy modules.   
+The MAIS Model is a collection of agent-based network models for the simulation of information or infection spread. 
+You can use your own network (graph) or play with the demo graphs included in this repository. You can derive your own models with a customised set of agent states or encode customised policy modules.   
 
 For information spread use:
   + [InfoSIRModel](src/models/agent_info_models.py)
-    - the implementation of SIR model
+    - the implementation of the SIR model
     - parameters:
-      - `beta`: transmision strenght
+      - `beta`: transmission strength
       - `I_duration`: duration in state I in days
     - policy functions:
       - [`Spreader`](src/policies/info_spreader.py): seeds the source of information to the node with pagerank corresponding to given quantile
@@ -80,7 +80,7 @@ Please follow the links to find out more details about the examples presented.
 + Higgs Twitter – `RumourModelInfo` <br>
   ```console
   cd scripts
-  source higgs.sh higgs_run
+  source higgs.sh 
   ```
   Simulation of information spread with temporal decay and event boost using fitted parameters.
 
