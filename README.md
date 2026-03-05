@@ -386,10 +386,10 @@ Please consult [How to run simulations](doc/run.md) for options of individual sc
 If you use MAIS in your research, please cite:
 
 ```bibtex
-@software{mais2025,
+@software{mais2026,
   author    = {Bakoš, Martin and Neruda, Roman and Suchopárová, Gabriela and Šlerka, Josef and Tuček, Vít and Vidnerová, Petra},
   title     = {{MAIS}: Multi-Agent Information/Infection Spread Model},
-  year      = {2025},
+  year      = {2026},
   doi       = {10.5281/zenodo.16421566},
   url       = {https://github.com/PetraVidnerova/MAIS}
 }
