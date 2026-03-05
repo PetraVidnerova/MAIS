@@ -13,9 +13,28 @@ This work was supported by the European Regional Development Fund project “Bey
 <img alt="image" src="logo/logo.jpg" width="80%"/>
 
 
-<hr> 
+<hr>
 
 <!--- PDF BREAK -->
+
+## Table of Contents
+
+- [Models](#models)
+- [Examples of Simulation Results](#examples-of-simulation-results)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+  - [Using uv (recommended)](#using-uv-recommended)
+  - [Using pip](#using-pip)
+  - [Using conda](#using-conda)
+  - [Optional: graph-tool](#optional-graph-tool)
+- [Usage](#usage)
+  - [Running your experiments](#1-running-your-experiments)
+  - [Result visualisation](#3-result-visualisation)
+  - [Animation](#4-animation)
+  - [Complete example: Higgs Twitter dataset](#5-complete-example-higgs-twitter-dataset)
+- [Configuration and Advanced Features](#configuration-and-advanced-features)
+
+## Models
 
 The MAIS Model is a collection of agent-based network models for the simulation of information or infection spread. 
 You can use your own network (graph) or play with the demo graphs included in this repository. You can derive your own models with a customised set of agent states or encode customised policy modules.   
