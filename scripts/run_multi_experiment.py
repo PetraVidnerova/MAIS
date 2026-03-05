@@ -1,3 +1,19 @@
+"""Command-line script for running many parallel MAIS epidemic simulations.
+
+This script is the parallel, multi-repetition counterpart of
+``run_experiment.py``.  It uses a ``Pool`` of worker processes to run
+``n_repeat`` independent stochastic replicates of the same model and writes
+the results either into a single ``.zip`` archive (one CSV per replicate,
+default) or into a combined ``.feather`` file.
+
+Typical usage::
+
+    python run_multi_experiment.py config.ini my_run --n_repeat 100 --n_jobs 8
+
+Output files are written to the directory specified by ``output_dir`` in the
+config's ``[TASK]`` section.
+"""
+
 import sys
 from zipfile import ZipFile
 import pandas as pd
@@ -22,7 +38,41 @@ from utils.pool import Pool
 
 
 def evaluate_model(model, setup):
+    """Run one replicate of the model and return its results.
 
+    This function is designed to be called by a worker process inside
+    ``utils.pool.Pool``.  It resets the model to a new random seed, runs
+    the simulation, and returns the resulting DataFrame alongside bookkeeping
+    information.
+
+    On ``AssertionError``, the failure is logged to a ``.FAILED`` file and
+    ``(idx, None, None, None, None)`` is returned so the pool can continue.
+
+    Args:
+        model (ModelM): The model instance assigned to this worker.
+        setup (tuple): A five-element tuple
+            ``(idx, random_seed, test_id, config, args)`` where
+
+            * ``idx`` (int) – worker index used to route answers back to the
+              pool.
+            * ``random_seed`` (int or None) – seed to pass to ``model.reset``.
+              ``None`` means the seed is unchanged.
+            * ``test_id`` (str) – tag appended to output file names.
+            * ``config`` (ConfigFile) – configuration object (used only for
+              error reporting).
+            * ``args`` (tuple) – ``(ndays, print_interval, verbose)`` run
+              parameters.
+
+    Returns:
+        tuple: ``(idx, df, deads, random_seed, suffix)`` where
+
+        * ``idx`` (int) – worker index.
+        * ``df`` (pandas.DataFrame or None) – per-day state history with an
+          added ``"id"`` column.
+        * ``deads`` – always ``None`` in the current implementation.
+        * ``random_seed`` (int) – actual seed used by the model.
+        * ``suffix`` (str) – file-name suffix derived from ``test_id``.
+    """
     my_model = model
 
     idx, random_seed, test_id, config, args = setup
@@ -92,7 +142,31 @@ def evaluate_model(model, setup):
 
 def demo(cf, test_id=None, model_random_seed=42,  print_interval=1, n_repeat=1, n_jobs=1,
          output_type="ZIP"):
+    """Run many parallel epidemic model replicates and aggregate their output.
 
+    Loads the graph once, creates ``n_jobs`` duplicates of the model, and
+    feeds tasks into a ``Pool``.  Results arrive asynchronously and are written
+    to disk on the fly (ZIP mode) or collected in memory and written at the
+    end (FEATHER mode).
+
+    Args:
+        cf (ConfigFile): Loaded configuration object describing the experiment.
+        test_id (str or None): Tag appended to output file and archive names.
+            Defaults to ``None`` (no tag).
+        model_random_seed (int or list[int]): Base seed (or explicit list of
+            seeds for each replicate).  When an integer, seeds for replicates
+            ``i`` are ``model_random_seed + i``.  Defaults to ``42``.
+        print_interval (int): Simulated-day interval for progress output.
+            Defaults to ``1``.
+        n_repeat (int): Total number of replicates to run.  Defaults to ``1``.
+        n_jobs (int): Number of parallel worker processes.  Defaults to ``1``.
+        output_type (str): Output format – ``"ZIP"`` (default) saves each
+            replicate as a separate CSV inside a zip archive; ``"FEATHER"``
+            concatenates all results into a single feather file.
+
+    Raises:
+        ValueError: If ``output_type`` is not ``"ZIP"`` or ``"FEATHER"``.
+    """
     #cf = ConfigFile()
     #cf.load(filename)
     graph = load_graph(cf)
@@ -194,6 +268,26 @@ def demo(cf, test_id=None, model_random_seed=42,  print_interval=1, n_repeat=1, 
 
 
 def save_to_zipped_csv(test_id, idx, df, config, random_seed, suffix, zipname):
+    """Append a single replicate's result DataFrame to a shared ZIP archive.
+
+    The CSV content is preceded by the configuration file text (each line
+    prefixed with ``#``) and the random seed, matching the single-run CSV
+    format produced by ``run_experiment.py``.
+
+    Args:
+        test_id (str): Experiment tag (used only for internal bookkeeping;
+            the file name is derived from ``suffix``).
+        idx (int): Replicate index (unused in the current implementation;
+            reserved for future use).
+        df (pandas.DataFrame): Per-day simulation results to write.
+        config (ConfigFile): Configuration object whose string representation
+            is prepended as comments.
+        random_seed (int): Actual random seed used for this replicate.
+        suffix (str): File-name suffix that forms part of the entry name
+            inside the archive (e.g. ``"_my_run_3"``).
+        zipname (str): Path to the ZIP archive to append to.  The archive
+            must already exist (created by the caller).
+    """
     file_name = f"history{suffix}.csv"
 
     cfg_string = config.to_string()

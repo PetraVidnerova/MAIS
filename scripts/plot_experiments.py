@@ -1,3 +1,16 @@
+"""Command-line script for plotting MAIS simulation results.
+
+Reads one or more simulation result files (``.csv``, ``.zip``, or
+``.feather``), computes aggregate statistics (median/mean with IQR or SD
+shading), and saves the resulting plot.  An optional fit/observed-data curve
+can be overlaid.
+
+Typical usage::
+
+    python plot_experiments.py results_a.zip results_b.zip \\
+        --column I_d --out_file plot.png --label_names "Scenario A,Scenario B"
+"""
+
 import glob
 import zipfile
 
@@ -15,11 +28,40 @@ import matplotlib.pyplot as plt
 
 
 def _add_id_column(df, fname):
+    """Add an ``"id"`` column to ``df`` derived from the base file name.
+
+    The ``"id"`` value is the base name of ``fname`` with the ``.csv``
+    extension removed.  The column is added in-place.
+
+    Args:
+        df (pandas.DataFrame): DataFrame to modify in-place.
+        fname (str): File path whose base name (without ``.csv``) becomes the
+            identifier.
+    """
     fname = os.path.basename(fname).replace('.csv', '')
     df["id"] = fname
 
 
 def process_zip(zip_path: str, save_feather=False):
+    """Extract all CSVs from a ZIP archive and concatenate them into one DataFrame.
+
+    Creates a temporary directory next to the ZIP file, extracts all
+    ``*.csv`` entries, reads them (ignoring comment lines starting with
+    ``#``), adds an ``"id"`` column to each, and concatenates the results.
+    The temporary directory is removed in a ``finally`` block regardless of
+    errors.
+
+    Args:
+        zip_path (str): Path to the ``.zip`` archive produced by
+            ``run_multi_experiment.py``.
+        save_feather (bool): If ``True``, the concatenated DataFrame is also
+            saved as a ``.feather`` file with the same base name as the ZIP.
+            Defaults to ``False``.
+
+    Returns:
+        pandas.DataFrame: Concatenated DataFrame with all replicate results
+        and an ``"id"`` column identifying each source file.
+    """
     tmp_dir = zip_path + '.tmp'
 
     try:
@@ -53,6 +95,41 @@ def process_zip(zip_path: str, save_feather=False):
 
 def plot_dfs(dfs, column, figsize, out_path, xlabel, ylabel, labels=None, title=None, ymax=None, use_median=True,
              use_sd=False, fit_me=None, show_whole_fit=False, day_indices=None, day_labels=None):
+    """Create and save a multi-series line plot from a list of DataFrames.
+
+    Each DataFrame in ``dfs`` is plotted as one line with an uncertainty band
+    (IQR or SD).  An optional fit/observed data curve can be overlaid.
+    Axis limits are inferred from the data unless overridden.
+
+    Args:
+        dfs (list[pandas.DataFrame]): List of result DataFrames, each
+            containing at minimum a ``"T"`` column and the column named by
+            ``column``.
+        column (str): Name of the y-axis column to plot.
+        figsize (tuple[int, int]): Figure size ``(width, height)`` in inches.
+        out_path (str): File path where the plot image is saved.
+        xlabel (str): Label for the x-axis.
+        ylabel (str): Label for the y-axis.
+        labels (list[str] or None): Legend labels, one per DataFrame in
+            ``dfs``.  Defaults to ``None`` (no legend).
+        title (str or None): Plot title.  Defaults to ``None``.
+        ymax (int or None): Upper limit of the y-axis.  Inferred from data
+            if ``None``.  Defaults to ``None``.
+        use_median (bool): Use median as the central estimator when
+            ``True``; use mean otherwise.  Defaults to ``True``.
+        use_sd (bool): Use standard-deviation shading when ``True``; use
+            interquartile-range shading otherwise.  Defaults to ``False``.
+        fit_me (pandas.DataFrame or None): Optional DataFrame with columns
+            ``"T"`` and ``column`` representing observed/fit data to overlay
+            as an unshaded line.  Defaults to ``None``.
+        show_whole_fit (bool): If ``True``, include ``fit_me`` in the x-axis
+            range calculation.  Defaults to ``False``.
+        day_indices (list[int] or None): Positions along the x-axis at which
+            to place custom tick marks.  Must be combined with
+            ``day_labels``.  Defaults to ``None``.
+        day_labels (list[str] or None): String labels for the ticks at
+            ``day_indices``.  Defaults to ``None``.
+    """
 
     fig, ax = plt.subplots(figsize=figsize)
 

@@ -1,3 +1,24 @@
+"""School epidemic-intervention policies for the MAIS simulation.
+
+This module provides policies designed for school-specific contact
+network graphs.  They manage week/weekend school-opening schedules,
+optional rapid antigen testing, and class-level quarantine.
+
+.. warning::
+    These policies are intended to be run with a **special school
+    graph** only.  Do not use them with general population graphs
+    (e.g. hodoninsko, lounsko, papertown).
+
+Classes:
+    BasicSchoolPolicy: Manages school open/weekend toggle and optional
+        student testing.
+    ClosePartPolicy: Extends :class:`BasicSchoolPolicy` with the
+        ability to close individual classes.
+    AlternatingPolicy: Alternates two groups of classes each week.
+    AlternateFreeMonday: Alternating policy with Monday as a free day.
+    AlternateAndMondayPCR: Alternating policy with Monday PCR testing.
+"""
+
 # NOTE: this policy is intended to be run with a special graph for schools!!!!
 # Do not use it for normal graphs (hodoninsko, lounsko, papertown, etc).
 import global_configs as cfgs
@@ -18,13 +39,41 @@ logging.basicConfig(level=logging.DEBUG)
 
 class BasicSchoolPolicy(Policy):
 
-    """
-    BasicSchoolPolicy takes care of switching work days 
-    and weekend.
+    """Policy that manages school-day / weekend toggling and optional testing.
 
+    On weekdays the school graph layers are active; on weekends all
+    layers are switched off.  For the first 35 simulation steps all
+    layers are also suppressed (warm-up period).  Optionally performs
+    rapid antigen testing on configurable weekdays and places positive
+    nodes into quarantine.
+
+    Args:
+        graph: The school contact network graph object.  Must expose
+            ``num_nodes``, ``nodes_age``, ``layer_weights``,
+            ``number_of_nodes``, ``QUARANTINE_COEFS``, ``nodes``,
+            ``is_quarantined``, and ``nodes_class``.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to an INI-style configuration
+            file.  The ``[TESTING]`` section may contain:
+
+            * ``testing`` – ``"Yes"`` to enable testing (default
+              ``"No"``).
+            * ``sensitivity`` – test sensitivity in [0, 1] (default
+              0.4).
+            * ``days`` – weekday index or list of indices on which
+              testing is performed (default ``(0, 2)``).
+        config_obj: Unused; reserved for future use.
     """
 
     def __init__(self, graph, model, config_file=None, config_obj=None):
+        """Initialise the basic school policy.
+
+        Args:
+            graph: The school contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+            config_obj: Reserved for future use.
+        """
         super().__init__(graph, model)
 
         self.weekend_start = 5
@@ -83,6 +132,14 @@ class BasicSchoolPolicy(Policy):
         self.stat_in_quara = TimeSeries(301, dtype=int)
 
     def nodes_to_quarantine(self, nodes):
+        """Remove nodes from school by switching off their school-layer edges.
+
+        Sets ``at_school[nodes]`` to ``False`` and turns off all edges
+        on school layers for those nodes.
+
+        Args:
+            nodes (numpy.ndarray): Indices of nodes to quarantine.
+        """
         self.at_school[nodes] = False
         if cfgs.MONITOR_NODE is not None and cfgs.MONITOR_NODE in nodes:
             monitor(self.model.t,
@@ -94,6 +151,15 @@ class BasicSchoolPolicy(Policy):
         self.graph.switch_off_edges(edges_to_close)
 
     def nodes_from_quarantine(self, nodes):
+        """Return nodes to school by switching on their school-layer edges.
+
+        Sets ``at_school[nodes]`` to ``True`` and restores all edges on
+        school layers for those nodes.
+
+        Args:
+            nodes (numpy.ndarray): Indices of nodes to release from
+                quarantine.
+        """
         self.at_school[nodes] = True
 
         if cfgs.MONITOR_NODE is not None and cfgs.MONITOR_NODE in nodes:
@@ -106,6 +172,12 @@ class BasicSchoolPolicy(Policy):
         self.graph.switch_on_edges(edges_to_release)
 
     def first_day_setup(self):
+        """Suppress all layers for the warm-up period and initialise statistics.
+
+        Saves a copy of the initial layer weights, sets all layer
+        weights to zero (school closed during warm-up), and fills
+        ``stat_in_quara`` with zeros for days before the policy starts.
+        """
         # # move teachers to R (just for one exp)
         # teachers = self.graph.nodes[self.graph.nodes_age >= 20]
         # #self.model.move_to_R(teachers)
@@ -118,7 +190,15 @@ class BasicSchoolPolicy(Policy):
         self.stat_in_quara[0:self.model.t] = 0
 
     def do_testing(self):
+        """Perform antigen testing on configured weekdays and quarantine positives.
 
+        On test days, identifies students currently at school and
+        stochastically classifies them as positive (with probability
+        ``test_sensitivity``).  Positive nodes are quarantined for
+        7 days.  Released nodes whose quarantine has ended are restored
+        to school.  Updates ``stat_in_quara`` with the current
+        quarantine count.
+        """
         released = self.depo.tick_and_get_released()
         if len(released) > 0:
             self.graph.recover_edges_for_nodes(released)
@@ -189,14 +269,28 @@ class BasicSchoolPolicy(Policy):
         self.stat_in_quara[self.model.t] = self.depo.num_of_prisoners
 
     def stop(self):
-        """ just finish necessary, but do nothing new """
+        """Signal the policy to stop any new interventions.
+
+        After calling ``stop``, no new quarantines or school closures
+        are initiated.
+        """
         self.stopped = True
 
     def closing_and_opening(self):
+        """Hook for subclasses to implement dynamic school-group opening/closing.
+
+        Called each time-step after the weekend toggle.  The default
+        implementation is a no-op.
+        """
         pass
 
     def run(self):
+        """Execute one time-step of the school policy.
 
+        Handles first-day setup, weekend toggling, warm-up layer
+        restoration (at day 35), subclass ``closing_and_opening`` hook,
+        and optional testing (from day 35 onwards).
+        """
         if self.first_day:
             self.first_day_setup()
             self.first_day = False
@@ -236,6 +330,13 @@ class BasicSchoolPolicy(Policy):
         #    logging.debug(f"Day {self.model.t}: Mean degree of a student {mean_degree}")
 
     def to_df(self):
+        """Return a DataFrame with daily school-quarantine statistics.
+
+        Returns:
+            pandas.DataFrame: DataFrame indexed by time ``T`` with
+            column ``school_policy_in_quara`` (number of nodes in
+            school quarantine) and ``day``.
+        """
         index = range(0, self.model.t+1)
         columns = {
             f"school_policy_in_quara":  self.stat_in_quara[:self.model.t+1],
@@ -248,23 +349,64 @@ class BasicSchoolPolicy(Policy):
 
 class ClosePartPolicy(BasicSchoolPolicy):
 
-    """
-    ClosePartPolicy enables to close classes listed in config file.
+    """School policy that can close specific classes listed in a config file.
 
+    Extends :class:`BasicSchoolPolicy` with helper methods to quarantine
+    or release all nodes belonging to a named set of classes.  On
+    first-day setup the classes listed under ``[CLOSED]`` in the config
+    file are sent to quarantine, and optionally all teacher edges are
+    closed.
+
+    Args:
+        graph: The school contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to a configuration file.
+            The ``[CLOSED]`` section may contain:
+
+            * ``close_teachers`` – ``"Yes"`` to close teacher edges
+              (default ``"No"``).
+            * ``classes`` – list of class names to quarantine at start.
+        config_obj: Reserved for future use.
     """
 
     def convert_class(self, a):
+        """Convert node class indices to class-name strings.
+
+        Args:
+            a (numpy.ndarray): Array of integer class indices.
+
+        Returns:
+            numpy.ndarray: Array of class-name strings (or ``None``
+            for out-of-range indices).
+        """
         _convert = np.vectorize(lambda x: (
             self.graph.cat_table["class"]+[None])[x])
         return _convert(a)
 
     def nodes_in_classes(self, list_of_classes):
+        """Return node indices belonging to any of the specified classes.
+
+        Args:
+            list_of_classes (list[str]): Class names to look up.
+
+        Returns:
+            numpy.ndarray: Indices of all nodes whose class name is in
+            ``list_of_classes``.
+        """
         # todo - save node_classes? not to convert every time
         node_classes = self.convert_class(self.graph.nodes_class)
         return self.graph.nodes[np.isin(node_classes, list_of_classes)]
 
     def classes_to_quarantine(self, list_of_classes):
-        """ Put all nodes belonging to listed classes to quarantine. """
+        """Send all nodes in the specified classes to quarantine.
+
+        Marks nodes as not at school and switches off their school-layer
+        edges.
+
+        Args:
+            list_of_classes (list[str]): Class names whose members
+                should be quarantined.
+        """
         self.nodes_to_close = self.nodes_in_classes(list_of_classes)
         self.at_school[self.nodes_to_close] = False
         if cfgs.MONITOR_NODE is not None and cfgs.MONITOR_NODE in self.nodes_to_close:
@@ -280,7 +422,15 @@ class ClosePartPolicy(BasicSchoolPolicy):
         self.graph.switch_off_edges(edges_to_close)
 
     def classes_from_quarantine(self, list_of_classes):
-        """ Releases all nodes belonging to listed classes from quarantine. """
+        """Release all nodes in the specified classes from quarantine.
+
+        Marks nodes as at school and switches on their school-layer
+        edges.
+
+        Args:
+            list_of_classes (list[str]): Class names whose members
+                should be released.
+        """
         self.nodes_to_release = self.nodes_in_classes(list_of_classes)
         #        self.graph.recover_edges_for_nodes(self.nodes_to_release)
         self.at_school[self.nodes_to_release] = True
@@ -294,7 +444,11 @@ class ClosePartPolicy(BasicSchoolPolicy):
         self.graph.switch_on_edges(edges_to_release)
 
     def first_day_setup(self):
+        """Run parent first-day setup and apply initial class closures from config.
 
+        Optionally closes teacher edges and quarantines classes listed
+        under ``[CLOSED]`` in the configuration file.
+        """
         super().first_day_setup()
 
         close_teachers = self.cf.section_as_dict(
@@ -323,7 +477,34 @@ class ClosePartPolicy(BasicSchoolPolicy):
 
 class AlternatingPolicy(ClosePartPolicy):
 
+    """School policy that alternates two groups of classes week by week.
+
+    One group attends school while the other stays home; the groups
+    swap every week (at ``weekend_end``).  Optionally, testing sub-groups
+    can be defined to alternate which half of each group is tested on a
+    given day.
+
+    The groups are either defined explicitly in the config file
+    (``[ALTERNATE]`` section with ``group1`` and ``group2`` class lists)
+    or derived from the graph's ``nodes_class_group`` attribute when
+    ``use_class_groups = Yes``.
+
+    Args:
+        graph: The school contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to a configuration file with
+            ``[ALTERNATE]`` and optionally ``[TESTING_GROUPS]``
+            sections.
+    """
+
     def __init__(self, graph, model, config_file=None):
+        """Initialise the alternating policy with group definitions from config.
+
+        Args:
+            graph: The school contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model, config_file)
 
         rotate_class_groups = self.cf.section_as_dict(
@@ -374,7 +555,13 @@ class AlternatingPolicy(ClosePartPolicy):
             self.test_groups = None
 
     def closing_and_opening(self):
-        """ closes everything for the weekend, alternates classes on the second level """
+        """Alternate active and passive groups at the start of each school week.
+
+        At ``weekend_end`` the active and passive groups are swapped:
+        the previously active group is quarantined and the previously
+        passive group is released.  Every two weeks the testing sub-groups
+        are also rotated.
+        """
 
         if self.model.t % 7 == self.weekend_end:
             self.passive_group, self.active_group = self.active_group, self.passive_group
@@ -397,7 +584,24 @@ class AlternatingPolicy(ClosePartPolicy):
 
 class AlternateFreeMonday(AlternatingPolicy):
 
+    """Alternating policy where Monday is a free day (school starts Tuesday).
+
+    Groups alternate weekly.  Testing is disabled by default.
+
+    Args:
+        graph: The school contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to a configuration file.
+    """
+
     def __init__(self, graph, model, config_file=None):
+        """Initialise with Monday as the first school day and no testing.
+
+        Args:
+            graph: The school contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model, config_file)
 
         self.weekend_start = 5
@@ -407,7 +611,25 @@ class AlternateFreeMonday(AlternatingPolicy):
 
 class AlternateAndMondayPCR(AlternatingPolicy):
 
+    """Alternating policy with high-sensitivity (PCR-equivalent) Monday testing.
+
+    Groups alternate weekly.  Testing is enabled on Mondays (weekday
+    index 1) with a sensitivity of 0.8 (mimicking PCR).
+
+    Args:
+        graph: The school contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to a configuration file.
+    """
+
     def __init__(self, graph, model, config_file=None):
+        """Initialise with Monday testing at 80 % sensitivity.
+
+        Args:
+            graph: The school contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model, config_file)
 
         self.weekend_start = 5

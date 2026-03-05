@@ -1,3 +1,36 @@
+"""Registry of all available simulation model classes.
+
+``model_zoo`` is a dictionary mapping model-name strings to their
+corresponding class objects.  It is used by loader utilities (e.g.
+``load_model_from_config``) to look up the correct class by name at runtime.
+
+Available models:
+
+* ``"ExtendedNetworkModel"`` –
+  :class:`~models.extended_network_model.ExtendedNetworkModel` (Gillespie
+  engine).
+* ``"ExtendedDailyNetworkModel"`` –
+  :class:`~models.extended_network_model.ExtendedDailyNetworkModel` (daily
+  Gillespie engine).
+* ``"ExtendedSequentialNetworkModel"`` –
+  :class:`~models.extended_network_model.ExtendedSequentialNetworkModel`
+  (sequential discrete-step engine).
+* ``"TGMNetworkModel"`` –
+  :class:`~models.extended_network_model.TGMNetworkModel` (multi-layer-graph
+  engine).
+* ``"SimulationDrivenModel"`` –
+  :class:`~models.agent_based_network_model.SimulationDrivenModel` (agent-
+  based plan engine; currently the primary supported model).
+* ``"InfoSIRModel"`` –
+  :class:`~models.agent_info_models.InfoSIRModel`.
+* ``"InfoTippingModel"`` –
+  :class:`~models.agent_info_models.InfoTippingModel`.
+* ``"RumourModel"`` –
+  :class:`~models.agent_info_models.RumourModel`.
+* ``"RumourModelInfo"`` –
+  :class:`~models.agent_info_models.RumourModelInfo`.
+"""
+
 # dictionary of available models
 # at the moment SimulationDrivenModel is the only one supported
 

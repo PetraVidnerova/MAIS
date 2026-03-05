@@ -1,6 +1,24 @@
 # NOTE: this is an older version of contact tracing policy for TGMNetworkModel,
 # not maintained now!
 
+"""Legacy contact-tracing policy for TGMNetworkModel (unmaintained).
+
+This module provides older-style quarantine and contact-tracing policy
+classes originally written for the TGMNetworkModel.  They are **not
+maintained** and should not be used for new simulations.  Prefer
+:mod:`policies.contact_tracing` for current work.
+
+Classes:
+    QuarantinePolicy: Base quarantine policy with contact tracing.
+    EvaQuarantinePolicy: Full quarantine + enter test policy.
+    CRLikeQuarantinePolicy: Czech-Republic-like variant.
+    StrongEvaQuarantinePolicy: Maximum-riskiness variant.
+    NoEvaQuarantinePolicy: Zero-riskiness variant.
+    MiniEvaQuarantinePolicy: Minimal-riskiness variant.
+    Exp2A/B/CQuarantinePolicy: Experimental riskiness variants.
+    W10/20/30/40/60/80QuarantinePolicy: Uniform riskiness variants.
+"""
+
 import numpy as np
 import pandas as pd
 from extended_network_model import STATES as states
@@ -25,11 +43,24 @@ DETECTED_STATES = (
 
 class QuarantinePolicy(Policy):
 
-    """ 
-    QuarantinePolicy with contact tracing.
+    """Base quarantine policy with optional contact tracing (legacy TGMNetworkModel).
+
+    Provides the core deposit/release mechanism and contact-history
+    filtering.  Intended as a base class; subclasses set ``coefs``,
+    ``riskiness``, and ``duration`` before use.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance (TGMNetworkModel).
     """
 
     def __init__(self, graph, model):
+        """Initialise the quarantine policy.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+        """
         super().__init__(graph, model)
 
         # depo of quarantined nodes
@@ -53,6 +84,13 @@ class QuarantinePolicy(Policy):
         # self.stat_released[0] = 0
 
     def to_df(self):
+        """Return a DataFrame with quarantine and tracing statistics.
+
+        Returns:
+            pandas.DataFrame: DataFrame indexed by time ``T`` with
+            columns for nodes in quarantine, detected nodes, contacts
+            collected, and released nodes.
+        """
         index = range(0, self.model.t+1)
         eva_name = type(self).__name__
         columns = {
@@ -67,11 +105,20 @@ class QuarantinePolicy(Policy):
         return df
 
     def stop(self):
-        """ just finish necessary, but do not qurantine new nodes """
+        """Signal the policy to stop quarantining new nodes.
+
+        After calling ``stop``, existing quarantines are still managed
+        but no new nodes are placed into quarantine.
+        """
         self.stopped = True
 
     def get_last_day(self):
-        """ get the part of model history corresponding to the current (last) day """
+        """Return the slice of model history corresponding to the current day.
+
+        Returns:
+            list: Entries from ``model.history`` that fall within the
+            time interval ``[current_day, current_day + 1)``.
+        """
         current_day = int(self.model.t)
         start = np.searchsorted(
             self.model.tseries[:self.model.tidx+1], current_day, side="left")
@@ -82,7 +129,11 @@ class QuarantinePolicy(Policy):
         return self.model.history[start:end]
 
     def quarantine_nodes(self, detected_nodes):
-        """ insert nodes into the depo and make modifications in a graph """
+        """Place detected nodes into quarantine and suppress their graph layers.
+
+        Args:
+            detected_nodes (list): Node indices to quarantine.
+        """
         if detected_nodes:
             assert self.coefs is not None
             self.graph.modify_layers_for_nodes(detected_nodes,
@@ -90,19 +141,34 @@ class QuarantinePolicy(Policy):
             self.depo.lock_up(detected_nodes, self.duration)
 
     def tick(self):
-        """ update time and return released """
+        """Advance the deposit by one day and return released nodes.
+
+        Returns:
+            numpy.ndarray: Indices of nodes released from quarantine today.
+        """
         released = self.depo.tick_and_get_released()
         return released
 
     def release_nodes(self, released):
-        """ update graph for nodes that are released """
+        """Restore graph edges for nodes leaving quarantine.
+
+        Args:
+            released (numpy.ndarray): Indices of nodes to release.
+        """
         if len(released) > 0:
             print(f"DBG {type(self).__name__} Released nodes: {released}")
             self.graph.recover_edges_for_nodes(released)
 
     def do_testing(self, released):
-        """ Check the given nodes. 
-        Returns array of healthy (negative test result) and array of ill (positive test result). 
+        """Test the given nodes and classify them as healthy or ill.
+
+        Args:
+            released (numpy.ndarray): Indices of nodes to test.
+
+        Returns:
+            tuple[numpy.ndarray, numpy.ndarray]: A pair
+            ``(healthy, still_ill)`` of node-index arrays based on
+            whether each node is in a recovered/susceptible state.
         """
 
         print("DBG Leaving tests", len(released))
@@ -124,6 +190,22 @@ class QuarantinePolicy(Policy):
         return healthy,  still_ill
 
     def filter_contact_history(self, detected_nodes, days_back=None):
+        """Filter contact history for detected nodes and apply riskiness weighting.
+
+        Looks back ``days_back`` days in ``model.contact_history`` for
+        edges where the source node is in ``detected_nodes``, then
+        stochastically retains each contact with probability equal to
+        the riskiness of its contact layer.
+
+        Args:
+            detected_nodes (list): Node indices whose contacts should be
+                traced.
+            days_back (int, optional): Number of days to look back.
+                Defaults to ``self.days_back``.
+
+        Returns:
+            list: Contact node indices that passed the riskiness filter.
+        """
         if days_back is None:
             days_back = self.days_back
 
@@ -160,12 +242,43 @@ class QuarantinePolicy(Policy):
         return selected_contacts
 
     def select_contacts(self, detected_nodes, days_back=None):
+        """Return the set of contacts for the given detected nodes.
+
+        Args:
+            detected_nodes (list): Node indices whose contacts should be
+                traced.
+            days_back (int, optional): Number of days to look back.
+                Defaults to ``self.days_back``.
+
+        Returns:
+            set: Set of contact node indices.
+        """
         return set(self.filter_contact_history(detected_nodes, days_back))
 
 
 class EvaQuarantinePolicy(QuarantinePolicy):
 
+    """Full quarantine policy with enter testing (legacy TGMNetworkModel).
+
+    Detected nodes (those entering a detected state during the last
+    day) are quarantined for ``duration`` days.  Their contacts are
+    traced, placed in a phone-call waiting queue, then quarantined and
+    given an enter test.  Contacts that test positive are moved to a
+    detected state and trigger further contact tracing.  Leaving nodes
+    are tested twice before release.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance (TGMNetworkModel).
+    """
+
     def __init__(self, graph, model):
+        """Initialise the Eva quarantine policy with default parameters.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+        """
         super().__init__(graph, model)
         self.enter_test = True
         self.coefs = QUARANTINE_COEFS
@@ -191,7 +304,14 @@ class EvaQuarantinePolicy(QuarantinePolicy):
         self.waiting_room_second_test = Depo(graph.number_of_nodes)
 
     def run(self):
+        """Execute one time-step of the Eva quarantine policy.
 
+        On the first call, statistics arrays are back-filled with zeros.
+        Each step: identifies newly detected nodes, traces their
+        contacts, advances all waiting rooms, performs enter tests,
+        quarantines all eligible nodes, runs exit tests, and releases
+        passing nodes.
+        """
         if self.first_day:
             self.stat_in_quarantine[0:self.model.t] = 0
             self.stat_detected[0:self.model.t] = 0
@@ -316,12 +436,33 @@ class EvaQuarantinePolicy(QuarantinePolicy):
 
 class CRLikeQuarantinePolicy(EvaQuarantinePolicy):
 
+    """Czech-Republic-like quarantine policy with time-varying riskiness.
+
+    Applies harder riskiness early in the simulation and relaxes it at
+    days 10 and 66.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
+        """Initialise with CR-like default riskiness.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+        """
         super().__init__(graph, model)
         self.riskiness = get_riskiness(1, 0.1, 0.01)
         self.enter_test = True
 
     def run(self):
+        """Execute one time-step, adjusting riskiness on key days.
+
+        Reconfigures riskiness at simulation days 10 and 66 before
+        delegating to :meth:`EvaQuarantinePolicy.run`.
+        """
         if self.model.t == 66:
             self.riskiness = get_riskiness(1.0, 0.8, 0.4)
             self.enter_test = True
@@ -332,12 +473,26 @@ class CRLikeQuarantinePolicy(EvaQuarantinePolicy):
 
 class StrongEvaQuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with maximum riskiness for all layers.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = RISK_FOR_LAYERS_MAX
 
 
 class NoEvaQuarantinePolicy(EvaQuarantinePolicy):
+
+    """Eva quarantine policy with zero riskiness (no contacts traced).
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -346,12 +501,26 @@ class NoEvaQuarantinePolicy(EvaQuarantinePolicy):
 
 class MiniEvaQuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with minimal riskiness (family only).
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = RISK_FOR_LAYERS_MINI
 
 
 class Exp2AQuarantinePolicy(EvaQuarantinePolicy):
+
+    """Experimental variant A: full riskiness for family, school/work, and leisure.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -360,12 +529,26 @@ class Exp2AQuarantinePolicy(EvaQuarantinePolicy):
 
 class Exp2BQuarantinePolicy(EvaQuarantinePolicy):
 
+    """Experimental variant B: full riskiness for family and school/work only.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(1.0, 1.0, 0.0, 0.0)
 
 
 class Exp2CQuarantinePolicy(EvaQuarantinePolicy):
+
+    """Experimental variant C: full riskiness for family contacts only.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -374,12 +557,26 @@ class Exp2CQuarantinePolicy(EvaQuarantinePolicy):
 
 class W10QuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with uniform 10 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(0.1, 0.1, 0.1)
 
 
 class W20QuarantinePolicy(EvaQuarantinePolicy):
+
+    """Eva quarantine policy with uniform 20 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -388,12 +585,26 @@ class W20QuarantinePolicy(EvaQuarantinePolicy):
 
 class W30QuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with uniform 30 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(0.3, 0.3, 0.3)
 
 
 class W40QuarantinePolicy(EvaQuarantinePolicy):
+
+    """Eva quarantine policy with uniform 40 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -402,6 +613,13 @@ class W40QuarantinePolicy(EvaQuarantinePolicy):
 
 class W60QuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with uniform 60 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(0.6, 0.6, 0.6)
@@ -409,13 +627,32 @@ class W60QuarantinePolicy(EvaQuarantinePolicy):
 
 class W80QuarantinePolicy(EvaQuarantinePolicy):
 
+    """Eva quarantine policy with uniform 80 % riskiness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(0.8, 0.8, 0.8)
 
 
 def _is_R(node_ids, memberships):
+    """Check whether nodes are in a recovered or susceptible state.
 
+    Args:
+        node_ids (numpy.ndarray): Indices of nodes to check.
+        memberships: Model membership array (state × nodes × 1).
+
+    Returns:
+        numpy.ndarray: Array of 0/1 values; 1 if the node is in a
+        recovered/susceptible state (R_u, R_d, S, S_s, D_u, or D_d).
+
+    Raises:
+        AssertionError: If ``memberships`` is ``None``.
+    """
     assert memberships is not None
 
     recovered_states_flags = (memberships[states.R_u] +
@@ -429,5 +666,16 @@ def _is_R(node_ids, memberships):
 
 
 def _riskiness(contact, graph, riskiness):
+    """Return the riskiness value for a given contact edge.
+
+    Args:
+        contact: Edge identifier used to look up the layer.
+        graph: The contact network graph with a ``get_layer_for_edge``
+            method.
+        riskiness (numpy.ndarray): Per-layer riskiness array.
+
+    Returns:
+        float: Riskiness of the layer for the given contact edge.
+    """
     #    print(f"DBG riskiness {graph.e_types[contact]}:{riskiness[graph.get_layer_for_edge(contact)]}")
     return riskiness[graph.get_layer_for_edge(contact)]

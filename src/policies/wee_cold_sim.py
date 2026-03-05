@@ -1,3 +1,13 @@
+"""Self-isolation policy for the current MAIS agent-based network model.
+
+This module provides :class:`WeeColdPolicy`, which causes individuals
+who develop symptoms (states ``I_s`` or ``S_s``) to self-isolate with
+a configurable probability.  Unlike the legacy :mod:`policies.wee_cold`
+module, this version works with the current
+:mod:`models.agent_based_network_model` and supports loading parameters
+from a configuration file.
+"""
+
 import numpy as np
 import pandas as pd
 from models.agent_based_network_model import STATES
@@ -13,11 +23,35 @@ import logging
 
 class WeeColdPolicy(Policy):
 
-    """ 
-    QuarantinePolicy with contact tracing.
+    """Self-isolation policy for symptomatic individuals.
+
+    When a node newly enters a symptomatic state (``I_s`` or ``S_s``),
+    it self-isolates with probability ``threshold``.  The node's
+    contact-network edges are suppressed for ``duration`` days.  At the
+    end of the isolation period, nodes still symptomatic are kept for
+    one additional day; asymptomatic nodes are released.
+
+    Args:
+        graph: The contact network graph object.  Quarantine
+            coefficients are taken from ``graph.QUARANTINE_COEFS`` if
+            available, otherwise the module-level defaults are used.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to an INI-style configuration
+            file.  The ``[SELFISOLATION]`` section may contain:
+
+            * ``threshold`` – self-isolation probability in [0, 1]
+              (default 0.5).
+            * ``duration`` – isolation length in days (default 7).
     """
 
     def __init__(self, graph, model, config_file=None):
+        """Initialise the self-isolation policy.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model)
 
         # depo of quarantined nodes
@@ -45,14 +79,27 @@ class WeeColdPolicy(Policy):
             self.duration = my_config.get("duration", self.duration)
 
     def to_df(self):
+        """Return ``None`` (no statistics collected by this policy).
+
+        Returns:
+            None
+        """
         return None
 
     def stop(self):
-        """ just finish necessary, but do not qurantine new nodes """
+        """Signal the policy to stop quarantining new nodes.
+
+        After calling ``stop``, ongoing quarantines are still managed
+        but no new symptomatic nodes are quarantined.
+        """
         self.stopped = True
 
     def quarantine_nodes(self, detected_nodes):
-        """ insert nodes into the depo and make modifications in a graph """
+        """Place detected nodes into quarantine and suppress their graph layers.
+
+        Args:
+            detected_nodes (list): Node indices to quarantine.
+        """
         if len(detected_nodes) > 0:
             assert self.coefs is not None
             self.graph.modify_layers_for_nodes(detected_nodes,
@@ -61,18 +108,33 @@ class WeeColdPolicy(Policy):
                               check_duplicate=True)
 
     def tick(self):
-        """ update time and return released """
+        """Advance the deposit by one day and return released nodes.
+
+        Returns:
+            numpy.ndarray: Indices of nodes released from quarantine today.
+        """
         released = self.depo.tick_and_get_released()
         return released
 
     def release_nodes(self, released):
-        """ update graph for nodes that are released """
+        """Restore graph edges for nodes leaving quarantine.
+
+        Args:
+            released (numpy.ndarray): Indices of nodes to release.
+        """
         if len(released) > 0:
             logging.info(f"DBG {type(self).__name__} Released nodes: {len(released)}")
             self.graph.recover_edges_for_nodes(released)
 
     def run(self):
+        """Execute one time-step of the self-isolation policy.
 
+        Identifies nodes that are newly symptomatic (entered ``I_s`` or
+        ``S_s`` for the first time today and not already in the deposit),
+        applies the ``threshold`` coin-flip to decide who self-isolates,
+        advances the deposit, and releases or extends isolation for nodes
+        whose period has elapsed.
+        """
         if self.stopped == True:
             return
 
@@ -122,5 +184,14 @@ class WeeColdPolicy(Policy):
                 self.release_nodes(ready_to_leave)
 
     def is_I_s(self, node_ids):
+        """Check whether nodes are currently in a symptomatic state (I_s or S_s).
+
+        Args:
+            node_ids (numpy.ndarray): Indices of nodes to check.
+
+        Returns:
+            numpy.ndarray: Boolean array; ``True`` for nodes whose
+            combined membership in states ``I_s`` and ``S_s`` equals 1.
+        """
         return (self.model.memberships[STATES.I_s][node_ids] +
                 self.model.memberships[STATES.S_s][node_ids]).ravel() == 1

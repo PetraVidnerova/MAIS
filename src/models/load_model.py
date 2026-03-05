@@ -1,3 +1,20 @@
+"""Utilities for loading epidemic models and graphs from config files.
+
+.. note::
+    This file is **abandoned** and retained only for historical reference.
+    The functions below may import modules that are no longer available.
+
+Provides helpers for:
+
+* :func:`load_model_from_config` – instantiate a model from a
+  :class:`ConfigFile`.
+* :func:`load_graph` – create a graph object as described in config.
+* :func:`load_policy` – bind a policy callback to the graph.
+* :func:`create_graph` – factory for named graph types.
+* :func:`matrix` – build a combined adjacency matrix from a graph generator.
+* :func:`magic_formula` – compute multi-layer contact probability matrix.
+"""
+
 # abandoned file
 import networkx as nx
 import numpy as np
@@ -21,7 +38,27 @@ def load_model_from_config(cf: ConfigFile,
                            hyperparams: Dict = None,
                            model_random_seed: int = 42,
                            use_policy: str = None):
+    """Instantiate an epidemic model from a :class:`ConfigFile`.
 
+    Reads model class name, graph specification, and hyperparameters from
+    *cf*, optionally overrides hyperparameters with *hyperparams*, and
+    returns a ready-to-run model together with run parameters.
+
+    Args:
+        cf (ConfigFile): Parsed configuration object.
+        preloaded_graph (tuple, optional): ``(graph, A)`` pair to use instead
+            of loading from config. Defaults to ``None``.
+        hyperparams (dict, optional): Override model parameters from config.
+            Defaults to ``None``.
+        model_random_seed (int, optional): Random seed for the model.
+            Defaults to ``42``.
+        use_policy (str, optional): Name of a policy to apply. Defaults to
+            ``None``.
+
+    Returns:
+        tuple: ``(model, run_params)`` where *run_params* is a dict with keys
+        ``T``, ``print_interval``, and ``verbose``.
+    """
     # load model hyperparameters; default params from config file are overwritten by hyperparams dict (if provided)
     model_params = cf.section_as_dict("MODEL")
     if hyperparams is not None:
@@ -50,6 +87,16 @@ def load_model_from_config(cf: ConfigFile,
 
 
 def load_graph(cf: ConfigFile):
+    """Load a graph object as described in the ``[GRAPH]`` section of *cf*.
+
+    Args:
+        cf (ConfigFile): Parsed configuration object containing ``[GRAPH]``
+            and ``[TASK]`` sections.
+
+    Returns:
+        tuple: ``(graph, A)`` where *graph* is the graph object and *A* is
+        the combined adjacency matrix (or ``None`` if not applicable).
+    """
     num_nodes = cf.section_as_dict("TASK").get("num_nodes", None)
 
     graph_name = cf.section_as_dict("GRAPH")["name"]
@@ -70,6 +117,20 @@ def load_graph(cf: ConfigFile):
 
 
 def load_policy(cf: ConfigFile, graph, policy: str):
+    """Load and bind a named policy from the ``[POLICY]`` config section.
+
+    Dynamically imports the policy function from the file named in the config,
+    wraps it with ``bound_policy``, and attaches it to *model* via
+    ``set_periodic_update``.
+
+    Args:
+        cf (ConfigFile): Parsed configuration object.
+        graph: Graph object to pass to ``bound_policy``.
+        policy (str): Name of the policy to load.
+
+    Raises:
+        ValueError: If *policy* is not listed in the config's policy names.
+    """
     policy_cfg = cf.section_as_dict("POLICY")
     if policy not in policy_cfg["name"]:
         raise ValueError("Unknown policy name.")
@@ -85,7 +146,29 @@ def load_policy(cf: ConfigFile, graph, policy: str):
 
 
 def create_graph(name, nodes="nodes.csv", edges="edges.csv", layers="etypes.csv", num_nodes=None):
+    """Factory: create a graph object by name.
 
+    Args:
+        name (str): Graph type identifier.  Supported values:
+            ``"romeo_and_juliet"``, ``"csv"``, ``"csv_petra"``,
+            ``"csv_light"``, ``"seirsplus_example"``, ``"random"``.
+        nodes (str, optional): Path to nodes CSV file (for CSV-type graphs).
+            Defaults to ``"nodes.csv"``.
+        edges (str, optional): Path to edges CSV file. Defaults to
+            ``"edges.csv"``.
+        layers (str, optional): Path to edge-types CSV file. Defaults to
+            ``"etypes.csv"``.
+        num_nodes (int, optional): Number of nodes (for synthetic graphs).
+            Defaults to ``None``.
+
+    Returns:
+        Graph object of the appropriate type.
+
+    Raises:
+        ValueError: If *name* is not a recognised graph type.
+        NotImplementedError: If the requested graph type requires unavailable
+            source files (e.g. ``"romeo_and_juliet"``).
+    """
     if name == "romeo_and_juliet":
         if not verona_available:
             raise NotImplementedError(
@@ -114,7 +197,22 @@ def create_graph(name, nodes="nodes.csv", edges="edges.csv", layers="etypes.csv"
 
 
 def matrix(graph, cf):
+    """Extract or build an adjacency matrix from the graph object.
 
+    Returns the combined adjacency matrix in the format appropriate for the
+    given graph type, applying any layer-closing scenario directives found in
+    the config.
+
+    Args:
+        graph: Graph object (``CSVGraph``, ``LightGraph``,
+            ``RandomSingleGraphGenerator``, ``GraphGenerator``, etc.).
+        cf (ConfigFile or None): Parsed config; may contain a ``[SCENARIO]``
+            section.  Pass ``None`` to skip scenario processing.
+
+    Returns:
+        scipy.sparse.csr_matrix or None: Combined adjacency matrix, or
+        ``None`` if not applicable for the given graph type.
+    """
     if cf:
         scenario = cf.section_as_dict("SCENARIO")
     else:
@@ -150,7 +248,23 @@ def matrix(graph, cf):
 
 
 def magic_formula(graph):
+    """Compute the combined multi-layer contact-probability matrix.
 
+    For each layer in the graph generator, multiplies layer-specific contact
+    probabilities and combines them using the complement rule
+    (``P(contact on at least one layer) = 1 - prod(1 - P_i)``).
+
+    .. note::
+        This function is currently broken (``rozvrtany``); it requires fixing
+        before production use.
+
+    Args:
+        graph: A ``GraphGenerator`` exposing ``get_layers_info()`` and
+            ``get_graph_for_layer()``.
+
+    Returns:
+        scipy.sparse.csr_matrix: Per-pair probability of contact on any layer.
+    """
     # rozvrtany ... nutno opravit
 
     N = graph.number_of_nodes()

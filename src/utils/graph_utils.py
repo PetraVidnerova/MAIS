@@ -1,10 +1,43 @@
+"""Graph analysis utilities for the MAIS simulation.
+
+This module provides helper functions for computing structural properties of
+the contact graph used in the simulation, such as node degree statistics
+derived from edge-probability data.
+"""
+
 import numpy as np
 from scipy.sparse import csr_matrix, lil_matrix
 
 
 def compute_mean_degree(graph, nodes):
-    """ computes mean number of expected contacts over the set of `nodes`
-    in the given `graph`. `graph` is a LightGraph 
+    """Compute the mean expected number of contacts (degree) for a set of nodes.
+
+    For each pair of nodes in the graph, the function aggregates all edges
+    connecting them to compute the probability that *at least one* contact
+    occurs on any layer. This probability is stored in a dense sparse matrix,
+    and the expected degree of each node in ``nodes`` is the row sum of that
+    matrix. The mean is then taken over all nodes in ``nodes``.
+
+    The computation iterates over all node pairs, so it is suited for analysis
+    rather than performance-critical simulation paths.
+
+    Args:
+        graph (LightGraph): The contact graph object. Must expose:
+            - ``graph.num_nodes`` (int): Total number of nodes.
+            - ``graph.nodes`` (iterable): All node indices.
+            - ``graph.A`` (array-like): Adjacency structure mapping a node
+              pair ``(n1, n2)`` to an index into ``graph.edges_repo``
+              (``0`` means no edge).
+            - ``graph.edges_repo`` (list): Repository of edge collections
+              keyed by the index returned from ``graph.A``.
+            - ``graph.get_edges_probs(edges)`` (callable): Returns an array
+              of transmission probabilities for the given edges.
+        nodes (iterable): Subset of node indices for which the mean degree is
+            computed.
+
+    Returns:
+        float: Mean expected number of contacts per node over the given
+        ``nodes``.
     """
 
     # first create matrix of all probs of contacts

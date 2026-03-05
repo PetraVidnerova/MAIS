@@ -1,3 +1,17 @@
+"""Information-diffusion and rumour-spreading model classes.
+
+This module defines several simulation models that reuse the
+:class:`~models.simulation_engine.SimulationEngine` infrastructure for
+information / opinion spreading rather than epidemic disease:
+
+* :class:`STATES` / :class:`Tipping` – state-code enumerations.
+* :class:`RumourModel` – basic SIR rumour-spreading model.
+* :class:`RumourModelInfo` – extended rumour model with time-varying
+  transmission and event-driven boost.
+* :class:`InfoSIRModel` – SIR model driven by graph edge probabilities.
+* :class:`InfoTippingModel` – threshold-based (tipping-point) adoption model.
+"""
+
 import json
 import numpy as np
 import pandas as pd
@@ -14,20 +28,43 @@ from utils.global_configs import monitor
 import utils.global_configs as global_configs
 
 
-
 class STATES():
+    """Simple SIR state codes for information-diffusion models.
+
+    Attributes:
+        S (int): Susceptible (uninformed).
+        I (int): Infected / informed (spreading the rumour).
+        R (int): Recovered (stopped spreading).
+        EXT (int): External node.
+    """
     S = 0
     I = 1 
     R = 2
     EXT = 10
 
 class Tipping():
+    """State codes for the threshold-based tipping-point model.
+
+    Attributes:
+        S (int): Susceptible (not yet adopted).
+        ACTIVE (int): Active (adopted / tipped).
+        EXT (int): External node.
+    """
+
     S = 0
     ACTIVE = 1
     EXT = 10
 
 
 class RumourModel(SimulationEngine):
+    """Basic SIR rumour-spreading model on a contact network.
+
+    Agents transition S → I when a neighbour is I (with rate ``lambda0``),
+    and I → R after a fixed duration ``I_duration``.
+
+    Inherits the plan-based stepping logic from
+    :class:`~models.simulation_engine.SimulationEngine`.
+    """
     states = [
         STATES.S,
         STATES.I,
@@ -70,15 +107,20 @@ class RumourModel(SimulationEngine):
     }
 
     def inicialization(self):
+        """Delegate to parent initialiser (no extra setup needed)."""
         super().inicialization()
-        
 
     def setup_series_and_time_keeping(self):
-
+        """Delegate to parent time-series setup."""
         super().setup_series_and_time_keeping()
 
-
     def states_and_counts_init(self, ext_nodes=None, ext_code=None):
+        """Initialise counts and flag S nodes for daily checks.
+
+        Args:
+            ext_nodes (int, optional): Number of external nodes.
+            ext_code (int, optional): State code for external nodes.
+        """
         super().states_and_counts_init(ext_nodes, ext_code)
 
         # need_check - state that needs regular checkup
@@ -86,13 +128,23 @@ class RumourModel(SimulationEngine):
 
         self.update_plan(np.ones(self.num_nodes, dtype=bool))
 
-    
     def prob_of_contact(self, source_state, dest_state, beta):
+        """Return nodes exposed by direct contact with I-state neighbours.
+
+        Iterates over all undirected edges.  For each edge between a node in
+        *source_state* and a node in *dest_state*, draws a Bernoulli coin with
+        probability *beta*.  Returns the indices of source nodes that were
+        exposed (may contain duplicates if a node has multiple I-neighbours).
+
+        Args:
+            source_state (int): State code of susceptible nodes.
+            dest_state (int): State code of infectious nodes.
+            beta (float): Per-edge transmission probability.
+
+        Returns:
+            numpy.ndarray: 1-D array of exposed node indices (possibly with
+            duplicates).
         """
-        Evaluates if transition happens.
-        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
-        :returns list of nodes (possibly with duplicates) that are exposed
-        """ 
 
         # source_states - states that can be infected
         # dest_states - states that are infectious
@@ -132,39 +184,47 @@ class RumourModel(SimulationEngine):
 
 
     def daily_update(self, nodes):
-        """
-        Everyday checkup
-        """
+        """Perform daily rumour-spreading check for susceptible nodes.
 
+        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move
+        to I on the next day.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.
+        """
         # S
-        target_nodes = self._get_target_nodes(nodes, STATES.S)      
+        target_nodes = self._get_target_nodes(nodes, STATES.S)
 
-        # try infection 
+        # try infection
         exposed_nodes = self.prob_of_contact(
             STATES.S,
-            STATES.I,  
+            STATES.I,
             self.lambda0,
         ).flatten()
 
-            
         self.time_to_go[exposed_nodes] = 1
         self.state_to_go[exposed_nodes] = STATES.I
 
-
     def update_plan(self, nodes):
-        """ This is done for nodes that  just changed their states.
-        New plans are generated according the state."""
+        """Set transition plans for nodes that just changed state.
 
+        * S: no scheduled transition; flagged for daily checks.
+        * I: scheduled to move to R after ``I_duration`` days.
+        * R: no further transition.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes to update.
+        """
         # STATES.S:     "S",
         target_nodes = self._get_target_nodes(nodes, STATES.S)
-        
+
         self.time_to_go[target_nodes] = -1
         self.state_to_go[target_nodes] = STATES.S
         self.need_check[target_nodes] = True
 
         # STATES.I:   "I"
         target_nodes = self._get_target_nodes(nodes, STATES.I)
-        self.time_to_go[target_nodes] = self.I_duration 
+        self.time_to_go[target_nodes] = self.I_duration
         self.state_to_go[target_nodes] = STATES.R
         self.need_check[target_nodes] = False
 
@@ -174,13 +234,25 @@ class RumourModel(SimulationEngine):
         self.state_to_go[target_nodes] = -1
         self.need_check[target_nodes] = False
 
-
-
     def run_iteration(self):
+        """Delegate to parent run_iteration (no extra logic needed)."""
         super().run_iteration()
 
-    
+
 class RumourModelInfo(RumourModel):
+    """Extended rumour model with time-decaying transmission and event boost.
+
+    Extends :class:`RumourModel` with:
+
+    * A time-decaying per-node transmission rate:
+      ``lambda = lambda0 * exp(-scale * time_in_I)``.
+    * An optional event at time ``t_event`` that adds a temporary boost to
+      lambda: ``lambda += event_boost * exp(-decay * (t - t_event))``.
+    * A stochastic I → R transition each day (probability ``beta_duration``).
+
+    The I state is maintained indefinitely until a daily Bernoulli trial
+    (probability ``beta_duration``) triggers recovery.
+    """
 
     fixed_model_parameters = {
         "lambda0": (0.001, "base rate of transmission"),
@@ -194,20 +266,32 @@ class RumourModelInfo(RumourModel):
     }
     
     def prob_of_contact(self, source_state, dest_state, beta):
-        """
-        Evaluates if transition happens.
-        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
-        :returns list of nodes (possibly with duplicates) that are exposed
-        """ 
+        """Return newly exposed nodes using time-decaying lambda and event boost.
 
+        Computes a per-node effective transmission rate ``lambda_`` based on:
+
+        * How long each I node has been infectious (decay over time).
+        * Whether the simulation has passed ``t_event`` (adds a boost).
+
+        Then for each S node uses the compound probability formula
+        ``1 - (1 - lambda_)^k`` where ``k`` is its count of I neighbours.
+
+        Args:
+            source_state (int): State code of susceptible nodes (S).
+            dest_state (int): State code of infectious nodes (I).
+            beta: Unused (included for API compatibility with parent).
+
+        Returns:
+            numpy.ndarray: 1-D array of exposed node indices.
+        """
         # source_states - states that can be infected
         # dest_states - states that are infectious
 
         main_s = time.time()
-        
+
         # is source in feasible state?
         is_relevant_source = self.memberships[source_state, self.graph.e_source, 0]
-        
+
         # is dest in feasible state?
         is_relevant_dest = self.memberships[dest_state, self.graph.e_dest, 0]
         
@@ -247,8 +331,14 @@ class RumourModelInfo(RumourModel):
         return exposed_nodes
 
     def daily_update(self, nodes):
-        """
-        Everyday checkup
+        """Perform daily spreading check and stochastic I → R transition.
+
+        Calls the parent :meth:`RumourModel.daily_update`, then for each I
+        node draws a Bernoulli coin (probability ``beta_duration``) to decide
+        if it recovers today.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.
         """
         super().daily_update(nodes)
 
@@ -261,20 +351,27 @@ class RumourModelInfo(RumourModel):
         self.state_to_go[end_I] = STATES.R
 
     def update_plan(self, nodes):
-        """ This is done for nodes that  just changed their states.
-        New plans are generated according the state."""
+        """Set transition plans for RumourModelInfo nodes.
 
+        * S: no scheduled transition; flagged for daily checks.
+        * I: no fixed deadline; flagged for daily checks (recovery is
+          decided stochastically each day).
+        * R: no further transition.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes to update.
+        """
         # STATES.S:     "S",
         target_nodes = self._get_target_nodes(nodes, STATES.S)
-        
+
         self.time_to_go[target_nodes] = -1
         self.state_to_go[target_nodes] = STATES.S
         self.need_check[target_nodes] = True
 
         # STATES.I:   "I"
         target_nodes = self._get_target_nodes(nodes, STATES.I)
-        self.time_to_go[target_nodes] = -1  
-        self.state_to_go[target_nodes] = STATES.I 
+        self.time_to_go[target_nodes] = -1
+        self.state_to_go[target_nodes] = STATES.I
         self.need_check[target_nodes] = True
 
         # STATES.R:   "R",
@@ -285,6 +382,16 @@ class RumourModelInfo(RumourModel):
 
 
 class InfoSIRModel(SimulationEngine):
+    """SIR information-spreading model driven by graph edge probabilities.
+
+    Uses the full edge-probability machinery from the graph object (rather than
+    the simple per-edge coin flip of :class:`RumourModel`) to activate contacts
+    each day.  The effective transmission rate per active edge is given by
+    the per-node ``beta`` parameter multiplied by the edge intensity.
+
+    Compartments: S (uninformed), I (spreading), R (stopped), EXT (external).
+    """
+
     states = [
         STATES.S,
         STATES.I,
@@ -330,15 +437,20 @@ class InfoSIRModel(SimulationEngine):
     }
 
     def inicialization(self):
+        """Delegate to parent initialiser (no extra setup needed)."""
         super().inicialization()
-        
 
     def setup_series_and_time_keeping(self):
-
+        """Delegate to parent time-series setup."""
         super().setup_series_and_time_keeping()
 
-
     def states_and_counts_init(self, ext_nodes=None, ext_code=None):
+        """Initialise counts and flag S nodes for daily infection checks.
+
+        Args:
+            ext_nodes (int, optional): Number of external nodes.
+            ext_code (int, optional): State code for external nodes.
+        """
         super().states_and_counts_init(ext_nodes, ext_code)
 
         # need_check - state that needs regular checkup
@@ -347,10 +459,22 @@ class InfoSIRModel(SimulationEngine):
         self.update_plan(np.ones(self.num_nodes, dtype=bool))
 
     def prob_of_contact(self, source_state, dest_state, beta):
+        """Compute per-node exposure probability using edge probabilities and intensities.
+
+        Activates edges stochastically using the graph's edge-probability
+        vector, then evaluates both directions for each active edge.  For
+        edges connecting a *source_state* node to a *dest_state* node,
+        applies a Bernoulli trial with rate ``beta[source] * intensity``.
+
+        Args:
+            source_state (int): State code of susceptible nodes.
+            dest_state (int): State code of infectious nodes.
+            beta (numpy.ndarray): Per-node transmission rate array.
+
+        Returns:
+            numpy.ndarray: Binary exposure vector of shape ``(num_nodes, 1)``;
+            1 where a node was newly exposed.
         """
-        Evaluates if transition happens.
-        Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
-        """ 
 
         # source_states - states that can be infected
         # dest_states - states that are infectious
@@ -428,51 +552,63 @@ class InfoSIRModel(SimulationEngine):
 
 
     def daily_update(self, nodes):
-        """
-        Everyday checkup
-        """
+        """Perform daily infection check for susceptible nodes.
 
+        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move
+        to I on the next day.  External nodes are not yet supported.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.
+
+        Raises:
+            NotImplementedError: If external nodes are present.
+        """
         # S
-        target_nodes = self._get_target_nodes(nodes, STATES.S)      
+        target_nodes = self._get_target_nodes(nodes, STATES.S)
 
         # if we have external nodes
         if self.num_ext_nodes > 0:
-            raise NotImplementedError("External nodes not implemented yet.")    
+            raise NotImplementedError("External nodes not implemented yet.")
 
-        # try infection 
+        # try infection
         P_infection = self.prob_of_contact(
                                       STATES.S,
-                                      STATES.I,  
+                                      STATES.I,
                                       self.beta
                                       ).flatten()
 
         exposed = P_infection[target_nodes]
-        
+
         exposed_mask = np.zeros(self.num_nodes, dtype=bool)
         exposed_mask[target_nodes] = (exposed == 1)
 
         print("Number of infected",  exposed_mask.sum())
         if exposed_mask.sum() > 0:
             print(exposed_mask)
-            
+
         self.time_to_go[exposed_mask] = 1
         self.state_to_go[exposed_mask] = STATES.I
 
-
     def update_plan(self, nodes):
-        """ This is done for nodes that  just changed their states.
-        New plans are generated according the state."""
+        """Set transition plans for InfoSIRModel nodes.
 
+        * S: no scheduled transition; flagged for daily checks.
+        * I: scheduled to move to R after ``I_duration`` days.
+        * R: no further transition.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes to update.
+        """
         # STATES.S:     "S",
         target_nodes = self._get_target_nodes(nodes, STATES.S)
-        
+
         self.time_to_go[target_nodes] = -1
         self.state_to_go[target_nodes] = STATES.S
         self.need_check[target_nodes] = True
 
         # STATES.I:   "I"
         target_nodes = self._get_target_nodes(nodes, STATES.I)
-        self.time_to_go[target_nodes] = self.I_duration 
+        self.time_to_go[target_nodes] = self.I_duration
         self.state_to_go[target_nodes] = STATES.R
         self.need_check[target_nodes] = False
 
@@ -482,13 +618,21 @@ class InfoSIRModel(SimulationEngine):
         self.state_to_go[target_nodes] = -1
         self.need_check[target_nodes] = False
 
-
-
     def run_iteration(self):
+        """Delegate to parent run_iteration (no extra logic needed)."""
         super().run_iteration()
 
  
 class InfoTippingModel(SimulationEngine):
+    """Threshold-based (tipping-point) adoption model on a contact network.
+
+    An agent adopts (S → ACTIVE) when the weighted fraction of its active
+    neighbours exceeds its personal threshold ``theta``.  Once active, the
+    agent remains active indefinitely.
+
+    Edge weights are the graph's ``e_intensities`` values, and daily contact
+    is stochastic (activated by edge probabilities).
+    """
 
     states = [
         Tipping.S,
@@ -518,6 +662,12 @@ class InfoTippingModel(SimulationEngine):
 
 
     def states_and_counts_init(self, ext_nodes=None, ext_code=None):
+        """Initialise counts and flag S nodes for daily tipping checks.
+
+        Args:
+            ext_nodes (int, optional): Number of external nodes.
+            ext_code (int, optional): State code for external nodes.
+        """
         super().states_and_counts_init(ext_nodes, ext_code)
 
         # need_check - state that needs regular checkup
@@ -526,7 +676,16 @@ class InfoTippingModel(SimulationEngine):
         self.update_plan(np.ones(self.num_nodes, dtype=bool))
 
     def _transmission(self):
-        """ Returns boolean vector, for each node whether it is newly activated. """ 
+        """Return a boolean bitmap of nodes that tip (S → ACTIVE) today.
+
+        For each S node, activates edges stochastically, counts the weighted
+        fraction of active neighbours, and flips the node to ACTIVE if the
+        fraction exceeds ``self.theta[node]``.
+
+        Returns:
+            numpy.ndarray: Boolean array of shape ``(num_nodes,)``; ``True``
+            where a node becomes active.
+        """
         ret = np.zeros(self.num_nodes, dtype=bool)
         active_nodes = self.memberships[Tipping.S]
 
@@ -570,38 +729,49 @@ class InfoTippingModel(SimulationEngine):
         return ret 
 
     def daily_update(self, nodes):
-        """
-        Everyday checkup
-        """
+        """Perform daily tipping check: activate nodes whose threshold is met.
 
+        Calls :meth:`_transmission` and schedules newly tipping nodes to
+        move to ACTIVE on the next day.  External nodes are not supported.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.
+
+        Raises:
+            NotImplementedError: If external nodes are present.
+        """
         # S
-        target_nodes = self._get_target_nodes(nodes, Tipping.S)      
+        target_nodes = self._get_target_nodes(nodes, Tipping.S)
 
         # if we have external nodes
         if self.num_ext_nodes > 0:
-            raise NotImplementedError("External nodes not present in Tipping Model.")    
+            raise NotImplementedError("External nodes not present in Tipping Model.")
 
-        # try infection 
+        # try infection
         transmission = self._transmission().flatten()
 
         self.time_to_go[transmission] = 1
         self.state_to_go[transmission] = Tipping.ACTIVE
 
-
     def update_plan(self, nodes):
-        """ This is done for nodes that  just changed their states.
-        New plans are generated according the state."""
+        """Set transition plans for InfoTippingModel nodes.
 
+        * S: no scheduled transition; flagged for daily tipping checks.
+        * ACTIVE: stays ACTIVE indefinitely; no further scheduled transition.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes to update.
+        """
         # STATES.S:     "S",
         target_nodes = self._get_target_nodes(nodes, Tipping.S)
-        
+
         self.time_to_go[target_nodes] = -1
         self.state_to_go[target_nodes] = Tipping.S
         self.need_check[target_nodes] = True
 
         # STATES.Active:   "Active"
         target_nodes = self._get_target_nodes(nodes, Tipping.ACTIVE)
-        self.time_to_go[target_nodes] = -1  
+        self.time_to_go[target_nodes] = -1
         self.state_to_go[target_nodes] = Tipping.ACTIVE
         self.need_check[target_nodes] = False
 

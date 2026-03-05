@@ -1,3 +1,11 @@
+"""SEIRS-Plus-Like continuous-time (Gillespie) simulation engine.
+
+This module defines :class:`SeirsPlusLikeEngine`, which extends
+:class:`~models.engine.BaseEngine` with a Gillespie-style event-driven
+simulation loop, network-contact propensity calculations, and contact-tracing
+helpers.
+"""
+
 import pandas as pd
 import numpy as np
 import scipy as scipy
@@ -11,10 +19,29 @@ from models.engine import BaseEngine
 
 
 class SeirsPlusLikeEngine(BaseEngine):
+    """Gillespie (continuous-time) epidemic engine for network models.
+
+    Extends :class:`~models.engine.BaseEngine` with:
+
+    * Propensity-based event selection (Gillespie algorithm).
+    * Network-aware contact probability calculations
+      (:meth:`prob_of_contact`, :meth:`num_contacts`).
+    * Built-in testing / contact-tracing scenario flags
+      (:meth:`update_scenario_flags`).
+    * Full time-series bookkeeping with automatic buffer extension.
+
+    Subclasses supply ``calc_propensities`` to define the concrete transition
+    rates.
+    """
 
     def inicialization(self):
-        """ model inicialization """
+        """Initialise model parameters and broadcast them to per-node arrays.
 
+        Reads constructor keyword arguments (falling back to per-parameter
+        defaults), seeds NumPy's RNG when a ``random_seed`` is given, calls
+        :meth:`update_graph` to build the adjacency matrix, and then
+        broadcasts every model parameter to a ``(num_nodes, 1)`` array.
+        """
         for argdict in (self.fixed_model_parameters,
                         self.common_arguments,
                         self.model_parameters):
@@ -41,7 +68,13 @@ class SeirsPlusLikeEngine(BaseEngine):
 #        exit()
 
     def setup_series_and_time_keeping(self):
+        """Create all time-series buffers for a SEIRS-Plus-like run.
 
+        Allocates :class:`~utils.history_utils.TimeSeries` objects for state
+        counts, state increments, population size, mean/median infection
+        probabilities, and the transition-event log.  Also initialises the
+        contact-history ring buffer.
+        """
         self.expected_num_transitions = 10  # TO: change to our situation
         self.expected_num_days = 301
         tseries_len = (self.num_transitions + 1) * self.num_nodes
@@ -93,7 +126,14 @@ class SeirsPlusLikeEngine(BaseEngine):
         self.tseries[0] = 0
 
     def states_and_counts_init(self):
-        """ Initialize Counts of inidividuals with each state """
+        """Initialise per-state node counts and the initial membership array.
+
+        Reads ``init_<STATE_LABEL>`` keyword arguments, assigns residual nodes
+        to the first state, randomly shuffles node assignments, and builds the
+        ``self.memberships`` integer array of shape
+        ``(num_states, num_nodes, 1)``.  Also zeroes ``durations``,
+        ``infect_start``, ``infect_time``, and ``test_waiting`` arrays.
+        """
 
         self.init_state_counts = {
             s: self.init_kwargs.get(f"init_{self.state_str_dict[s]}", 0)
@@ -147,11 +187,22 @@ class SeirsPlusLikeEngine(BaseEngine):
         self.test_waiting = np.zeros(self.num_nodes, dtype=int)
 
     def node_degrees(self, Amat):
-        """ return number of degrees of  nodes,
-        i.e. sums of adj matrix cols """
+        """Return the degree of each node (sum of adjacency-matrix columns).
+
+        Args:
+            Amat (scipy.sparse.csr_matrix): Adjacency matrix.
+
+        Returns:
+            numpy.ndarray: Array of shape ``(num_nodes, 1)``.
+        """
         return Amat.sum(axis=0).reshape(self.num_nodes, 1)
 
     def update_scenario_flags(self):
+        """Recompute ``testing_scenario`` and ``tracing_scenario`` flags.
+
+        These boolean attributes are used by ``calc_propensities`` to skip
+        expensive matrix operations when testing or tracing is inactive.
+        """
         testing_infected = np.any(self.theta_Ia) or np.any(
             self.theta_Is) or np.any(self.phi_Ia) or np.any(self.phi_Is)
         positive_test_for_I = np.any(self.psi_Ia) or np.any(self.psi_Is)
@@ -172,9 +223,21 @@ class SeirsPlusLikeEngine(BaseEngine):
         )
 
     def num_contacts(self, state):
-        """ return numbers of contacts from given state
-        if state is a list, it is sum over all states """
+        """Return per-node contact counts from nodes in *state*.
 
+        Uses the membership arrays and the adjacency matrix to count how many
+        neighbours of each node are currently in *state*.
+
+        Args:
+            state (int or list of int): A single state code, or a list of
+                state codes whose contacts are summed.
+
+        Returns:
+            numpy.ndarray: Column vector of shape ``(num_nodes, 1)``.
+
+        Raises:
+            TypeException: If *state* is neither an ``int`` nor a ``list``.
+        """
         if type(state) == int:
             # if TF_ENABLED:
             #     with tf.device('/GPU:' + "0"):
@@ -199,6 +262,27 @@ class SeirsPlusLikeEngine(BaseEngine):
                 "num_contacts(state) accepts str or list of strings")
 
     def prob_of_contact(self, source_states, source_candidate_states, dest_states, dest_candidate_states, beta):
+        """Compute per-node probability of becoming newly exposed via network contacts.
+
+        Stochastically activates edges between *source_candidate_states* and
+        *dest_candidate_states*, records active contacts, then computes for
+        each node in *source_states* the probability of being exposed by at
+        least one neighbour in *dest_states*.
+
+        Args:
+            source_states (list of int): States that can become exposed.
+            source_candidate_states (list of int): Candidate source states
+                (superset of *source_states*) used for edge selection.
+            dest_states (list of int): Infectious states.
+            dest_candidate_states (list of int): Candidate destination states
+                (superset of *dest_states*) used for edge selection.
+            beta (numpy.ndarray): Per-node transmission rate, shape
+                ``(num_nodes, 1)``.
+
+        Returns:
+            numpy.ndarray: Per-node exposure probability, shape
+            ``(num_nodes, 1)``.
+        """
         #        print(states)
         # for i in states:
         #    print(self.current_state_count(i))
@@ -293,12 +377,32 @@ class SeirsPlusLikeEngine(BaseEngine):
         #  product over columns
 
     def current_state_count(self, state):
+        """Return the count of nodes in *state* at the current time index.
+
+        Args:
+            state (int): State code.
+
+        Returns:
+            int: Current count.
+        """
         return self.state_counts[state][self.tidx]
 
     def current_N(self):
+        """Return the current effective population size.
+
+        Returns:
+            float: Population size at the current time index (excludes
+            invisible states).
+        """
         return self.N[self.tidx]
 
     def increase_data_series_length(self):
+        """Extend time-series and transition-history buffers.
+
+        Called automatically by :meth:`run_iteration` when storage is nearly
+        exhausted.  Calls ``bloat()`` on all relevant
+        :class:`~utils.history_utils.TimeSeries` objects.
+        """
         self.expected_num_transitions = 10  # TO: change to our situation
         tseries_len = (self.expected_num_transitions + 1) * self.num_nodes
 
@@ -312,7 +416,12 @@ class SeirsPlusLikeEngine(BaseEngine):
         self.N.bloat(self.expected_num_days)
 
     def finalize_data_series(self):
+        """Trim all time-series to the actually consumed length.
 
+        Called at the end of a run.  Invokes ``finalize(self.tidx)`` on
+        ``self.tseries``, ``self.history``, all state-count / state-increment
+        series, and ``self.N``.
+        """
         self.tseries.finalize(self.tidx)
         self.history.finalize(self.tidx)
         for state in self.states:
@@ -321,6 +430,15 @@ class SeirsPlusLikeEngine(BaseEngine):
         self.N.finalize(self.tidx)
 
     def save(self, file_or_filename):
+        """Save the simulation time-series to a CSV file.
+
+        Assembles per-state counts and increments, saves them using the
+        floating-point event time as the index.
+
+        Args:
+            file_or_filename (str or file-like): Destination path or open
+                file object.
+        """
         index = self.tseries
         col_increments = {
             "inc_" + self.state_str_dict[x]: col_inc
@@ -338,7 +456,18 @@ class SeirsPlusLikeEngine(BaseEngine):
         print(df)
 
     def run_iteration(self):
+        """Perform one Gillespie step: select and apply one state transition.
 
+        Uses the propensities returned by ``calc_propensities`` to sample the
+        next event time (exponential distribution) and the next transition
+        (multinomial selection).  Updates memberships, state-count time-series,
+        and the transition history.
+
+        Returns:
+            bool: ``True`` if the simulation should continue; ``False`` if the
+            maximum time has been reached or no further transitions are
+            possible.
+        """
         if (self.tidx >= self.tseries.len()-1):
             # Room has run out in the timeseries storage arrays; double the size of these arrays
             self.increase_data_series_length()
@@ -402,7 +531,23 @@ class SeirsPlusLikeEngine(BaseEngine):
         return True
 
     def run(self, T, print_interval=10, verbose=False):
+        """Run the Gillespie simulation for up to *T* time units.
 
+        Loops over :meth:`run_iteration` until the simulation terminates or
+        *T* is exhausted.  Fires ``self.periodic_update_callback`` at each
+        midnight and optionally prints progress.
+
+        Args:
+            T (int or float): Number of time units to simulate.
+            print_interval (int, optional): Print status every this many
+                simulated days. Set to ``0`` or negative to suppress all
+                output. Defaults to ``10``.
+            verbose (bool, optional): If ``True``, include per-state counts in
+                progress output. Defaults to ``False``.
+
+        Returns:
+            bool: ``True`` on successful completion, ``False`` if *T* <= 0.
+        """
         if not T > 0:
             return False
 

@@ -1,9 +1,29 @@
+"""Random number generation utilities for the MAIS simulation.
+
+This module provides helpers for reproducible random sampling, ordered-tuple
+generation, and discrete duration sampling. It is used across the simulation
+to draw stochastic values for disease progression durations and other
+time-varying random quantities.
+"""
+
 import numpy as np
 from numpy.random import Generator, SFC64
 import logging
 
 
 class RandomGenerator():
+    """Seeded pseudo-random number generator wrapper using the SFC64 bit generator.
+
+    Wraps NumPy's ``Generator`` backed by the fast ``SFC64`` bit generator so
+    that independent, reproducible streams can be attached to different parts
+    of the model.
+
+    Note:
+        Adding per-component generators is still in progress.
+
+    Args:
+        seed (int): Integer seed passed to ``SFC64`` for reproducibility.
+    """
 
     # add own generators to individual parts of a model (in progress)
 
@@ -11,19 +31,48 @@ class RandomGenerator():
         self.rng = Generator(SFC64(seed))
 
     def rand(n):
+        """Generate ``n`` uniformly distributed random floats in ``[0, 1)``.
+
+        Args:
+            n (int): Number of random values to generate.
+
+        Returns:
+            numpy.ndarray: Array of shape ``(n,)`` with values in ``[0, 1)``.
+        """
         return rng.random(n)
 
 
 def _random_from_probs(what, p, n=1):
+    """Draw ``n`` random samples from ``what`` according to probabilities ``p``.
+
+    Args:
+        what (int or array-like): If an integer, samples are drawn from
+            ``range(what)``. Otherwise samples are drawn from the provided
+            sequence.
+        p (array-like): Probability weights for each element of ``what``.
+            Must sum to 1.
+        n (int, optional): Number of samples to draw. Defaults to ``1``.
+
+    Returns:
+        numpy.ndarray: Array of ``n`` sampled values.
+    """
     return np.random.choice(what, p=p, size=n)
 
 
 def _check_sorted(value_list):
-    """ list of numpy arrays
-    checks x1i < x2i < ... < xni
+    """Check that corresponding elements across a list of arrays are strictly increasing.
 
-    returns True/False arrays
-    True are valid points
+    Given arrays ``[x1, x2, ..., xn]`` (each of the same shape), verifies
+    element-wise that ``x1[i] < x2[i] < ... < xn[i]`` for every index ``i``.
+
+    Args:
+        value_list (list of numpy.ndarray): Ordered list of arrays to compare
+            pairwise. All arrays must have the same shape.
+
+    Returns:
+        numpy.ndarray: Boolean array of the same shape as each input array.
+        ``True`` at position ``i`` means all consecutive pairs satisfy the
+        strict ordering at that position; ``False`` indicates a violation.
     """
     # print()
     # print(value_list)
@@ -42,11 +91,24 @@ def _check_sorted(value_list):
 
 
 def gen_tuple1(n, shape, *args):
-    """ generate n-tuple of  values, r_1 < r_2 < .... < r_n
+    """Generate an ``n``-tuple of random values satisfying a strict ordering.
 
-    shape ... shape of generated "values" 
+    Draws values ``(r_1, r_2, ..., r_n)`` such that ``r_1 < r_2 < ... < r_n``
+    element-wise across a batch of size ``shape``. Any positions that violate
+    the ordering are resampled repeatedly until all positions satisfy the
+    constraint.
 
-    args* - random duration generators objects 
+    Args:
+        n (int): Number of elements in the tuple. Must equal ``len(args)``.
+        shape (int or tuple): Shape of the batch to generate (passed as ``n``
+            argument to each generator's ``get`` method).
+        *args: Exactly ``n`` random duration generator objects, each exposing
+            a ``get(n=...)`` method that returns a NumPy array of samples.
+
+    Returns:
+        list of numpy.ndarray: List of ``n`` arrays, each of shape ``shape``,
+        satisfying ``result[0] < result[1] < ... < result[n-1]``
+        element-wise.
 
     Example:
          >>> gen_tuple(3, rng1, rng2, rng3)
@@ -77,11 +139,24 @@ def gen_tuple1(n, shape, *args):
 
 
 def gen_tuple2(n, shape, *args):
-    """ generate n-tuple of  values, r_1 < r_2 < .... < r_n
+    """Generate an ``n``-tuple of random values satisfying a strict ordering (clipping variant).
 
-    shape ... shape of generated "values" 
+    Draws values ``(r_1, r_2, ..., r_n)`` such that ``r_1 < r_2 < ... < r_n``
+    element-wise across a batch of size ``shape``. Unlike :func:`gen_tuple1`,
+    ordering is enforced by clipping each subsequent value to be at least
+    ``previous + 1`` rather than by resampling.
 
-    args* - random duration generators objects 
+    Args:
+        n (int): Number of elements in the tuple. Must equal ``len(args)``.
+        shape (int or tuple): Shape of the batch to generate (passed as ``n``
+            argument to each generator's ``get`` method).
+        *args: Exactly ``n`` random duration generator objects, each exposing
+            a ``get(n=...)`` method that returns a NumPy array of samples.
+
+    Returns:
+        list of numpy.ndarray: List of ``n`` arrays, each of shape ``shape``,
+        satisfying ``result[0] < result[1] < ... < result[n-1]``
+        element-wise.
 
     Example:
          >>> gen_tuple(3, rng1, rng2, rng3)
@@ -97,15 +172,37 @@ def gen_tuple2(n, shape, *args):
 
 
 def gen_tuple(n, shape, *args):
+    """Generate an ``n``-tuple of strictly ordered random values.
+
+    Delegates to :func:`gen_tuple2`. See that function for full documentation.
+
+    Args:
+        n (int): Number of elements in the tuple.
+        shape (int or tuple): Shape of the batch to generate.
+        *args: Exactly ``n`` random duration generator objects.
+
+    Returns:
+        list of numpy.ndarray: List of ``n`` strictly ordered arrays.
+    """
     return gen_tuple2(n, shape, *args)
 
 
 class RandomDuration():
-    """
-    This object is inteded for generating duration times (time spend in a particular state)
-    given the whole duration distribution. 
+    """Discrete random duration sampler driven by a full probability distribution.
 
-    probs - should contain an numpy array with probabilities of individual lengths including zero
+    Intended for generating the time (in discrete steps, e.g. days) that an
+    agent spends in a particular disease state. The distribution is specified
+    as a probability mass function (PMF) over non-negative integer durations
+    starting from zero.
+
+    Args:
+        probs (array-like): NumPy array of probabilities for durations
+            ``0, 1, 2, ..., len(probs)-1``. Values must be non-negative and
+            sum to 1.
+        precompute (bool, optional): If ``True``, a large buffer of ``10^6``
+            pre-drawn samples is generated at construction time. Currently the
+            buffer is not stored, so this flag has no effect on subsequent
+            ``get`` calls. Defaults to ``False``.
     """
 
     def __init__(self, probs, precompute=False):
@@ -116,6 +213,15 @@ class RandomDuration():
             buf = _random_from_probs(self.N, self.probs, 10**6)
 
     def get(self, n=1):
+        """Draw ``n`` random duration values from the distribution.
+
+        Args:
+            n (int, optional): Number of samples to draw. Defaults to ``1``.
+
+        Returns:
+            numpy.ndarray: Array of ``n`` integer duration values drawn
+            according to ``self.probs``.
+        """
         values = _random_from_probs(self.N, self.probs, n)
 
         return values

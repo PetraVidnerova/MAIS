@@ -1,3 +1,14 @@
+"""Sequential (discrete-time daily-step) epidemic simulation engine.
+
+This module defines :class:`SequentialEngine`, which overrides the continuous-
+time Gillespie loop of :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`
+with a discrete daily-step update: all nodes draw new states simultaneously
+once per day using roulette-wheel selection over the propensity matrix.
+
+It also provides an extended :class:`STATES` enumeration and the helper
+:func:`_searchsorted2d` used for vectorised roulette-wheel selection.
+"""
+
 import pandas as pd
 import numpy as np
 import scipy as scipy
@@ -15,6 +26,28 @@ from models.engine_seirspluslike import SeirsPlusLikeEngine
 
 
 class STATES():
+    """Extended integer state codes used by :class:`SequentialEngine` models.
+
+    Attributes:
+        S (int): Susceptible.
+        S_s (int): Susceptible with false symptoms.
+        E (int): Exposed.
+        I_n (int): Infectious, asymptomatic non-symptomatic track.
+        I_a (int): Infectious, pre-symptomatic.
+        I_s (int): Infectious, symptomatic.
+        I_ds (int): Infectious, symptomatic, detected.
+        J_s (int): Post-infectious, symptomatic.
+        J_n (int): Post-infectious, asymptomatic.
+        E_d (int): Exposed, detected.
+        I_da (int): Infectious, pre-symptomatic, detected.
+        I_dn (int): Infectious, asymptomatic, detected.
+        J_ds (int): Post-infectious, symptomatic, detected.
+        J_dn (int): Post-infectious, asymptomatic, detected.
+        R_d (int): Recovered, detected.
+        R_u (int): Recovered, undetected.
+        D_d (int): Dead, detected.
+        D_u (int): Dead, undetected.
+    """
     S = 0
     S_s = 1
     E = 2
@@ -38,6 +71,19 @@ class STATES():
 
 
 def _searchsorted2d(a, b):
+    """Vectorised row-wise ``numpy.searchsorted``.
+
+    For each row *i*, finds the insertion position of ``b[i]`` in ``a[i]``.
+    Used for efficient roulette-wheel selection across all nodes in one call.
+
+    Args:
+        a (numpy.ndarray): 2-D sorted array of shape ``(m, n)``.
+        b (numpy.ndarray): 1-D or 2-D query values of shape ``(m,)`` or
+            ``(m, 1)``.
+
+    Returns:
+        numpy.ndarray: 1-D array of shape ``(m,)`` with insertion indices.
+    """
     m, n = a.shape
     max_num = np.maximum(a.max() - a.min(), b.max() - b.min()) + 1
     r = max_num * np.arange(a.shape[0])[:, None]
@@ -46,16 +92,41 @@ def _searchsorted2d(a, b):
 
 
 class SequentialEngine(SeirsPlusLikeEngine):
-    """ should work in the same way like SEIRSPlusLikeEngine
-    but makes the state changes only once a day """
+    """Discrete daily-step engine (roulette-wheel selection over propensities).
+
+    Replaces the continuous-time Gillespie loop of
+    :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine` with a
+    synchronous, per-node roulette-wheel update executed once per simulated
+    day.  All propensities must therefore sum to 1 across transitions for each
+    node (i.e. they are interpreted as probabilities rather than rates).
+
+    Additional public methods allow manual state manipulation for scenario
+    modelling: :meth:`move_to_E`, :meth:`move_to_R`, :meth:`force_infect`,
+    :meth:`detected_node`.
+    """
 
     def inicialization(self):
+        """Initialise the sequential engine and allocate the testable array.
+
+        Calls the parent :meth:`inicialization`, then creates
+        ``self.testable`` — a per-node boolean array tracking whether a node
+        will seek a test when symptomatic.
+        """
         super().inicialization()
         self.testable = np.zeros(
             shape=(self.graph.number_of_nodes, 1), dtype=bool)
 
     def run_iteration(self):
+        """Perform one day of simulation: compute propensities and update states.
 
+        For every node draws a uniform random number and selects its next state
+        via roulette-wheel selection over the column of propensities.  State
+        changes are accumulated in ``self.delta`` and applied in a single batch
+        at the end of the day.
+
+        Returns:
+            bool: Always ``True`` (termination is managed by :meth:`run`).
+        """
         # memberships check
         # try:
         #    assert np.all(self.memberships.sum(axis=0) == 1)
@@ -264,7 +335,23 @@ class SequentialEngine(SeirsPlusLikeEngine):
 # #                print(flush=True)
 
     def run(self, T, print_interval=0, verbose=False):
+        """Run the simulation for *T* days with daily-step updates.
 
+        Iterates over days 1..T calling :meth:`run_iteration` each day.
+        Fires ``self.periodic_update_callback`` when set.  If the epidemic
+        ends early (all unstable counts zero), fills remaining days with the
+        last observed counts.
+
+        Args:
+            T (int): Number of days to simulate.
+            print_interval (int, optional): Print status every this many days.
+                Set to ``0`` to suppress. Defaults to ``0``.
+            verbose (bool, optional): If ``True``, print per-state counts at
+                each interval. Defaults to ``False``.
+
+        Returns:
+            bool: Always ``True``.
+        """
         # keep it, saves time
         self.delta = np.empty((self.num_states, self.num_nodes, 1), dtype=int)
         self.node_ids = np.arange(self.num_nodes)
@@ -357,6 +444,10 @@ class SequentialEngine(SeirsPlusLikeEngine):
         return True
 
     def increase_data_series_length(self):
+        """Extend all daily time-series buffers by 100 entries.
+
+        Called automatically when the pre-allocated storage is exhausted.
+        """
         for state in self.states:
             self.state_counts[state].bloat(100)
             self.state_increments[state].bloat(100)
@@ -371,10 +462,21 @@ class SequentialEngine(SeirsPlusLikeEngine):
         self.medianeprobs.bloat(100)
 
     def increase_history_len(self):
+        """Extend the event-history and time-series buffers.
+
+        Enlarges ``self.tseries`` and ``self.history`` by
+        ``10 * num_nodes`` entries.
+        """
         self.tseries.bloat(10*self.num_nodes)
         self.history.bloat(10*self.num_nodes)
 
     def finalize_data_series(self):
+        """Trim all time-series to the actually consumed length.
+
+        Calls ``finalize(self.t)`` on every daily
+        :class:`~utils.history_utils.TimeSeries` and ``finalize(self.tidx)``
+        on the event-log series.
+        """
         self.tseries.finalize(self.tidx)
         self.history.finalize(self.tidx)
         self.num_tests.finalize(self.t)
@@ -391,20 +493,56 @@ class SequentialEngine(SeirsPlusLikeEngine):
         self.medianeprobs.finalize(self.t)
 
     def current_state_count(self, state):
-        """ here current = self.t (not self.tidx as in seirsplus-derived models) """
+        """Return the count of nodes in *state* at the current day.
+
+        Overrides the parent method: uses ``self.t`` (day index) rather than
+        ``self.tidx`` (event index).
+
+        Args:
+            state (int): State code.
+
+        Returns:
+            int: Node count on the current day.
+        """
         return self.state_counts[state][self.t]
 
     def current_N(self):
-        """ here current = self.t (not self.tidx as in seirsplus-derived models) """
+        """Return the effective population size on the current day.
+
+        Overrides the parent method: uses ``self.t`` rather than
+        ``self.tidx``.
+
+        Returns:
+            float: Population size (excluding invisible-state nodes).
+        """
         return self.N[self.t]
 
     def get_state_count(self, state=None):
+        """Return per-day count time-series for a given state or all states.
+
+        Args:
+            state (int, optional): State code.  If ``None``, returns the full
+                ``state_counts`` dictionary. Defaults to ``None``.
+
+        Returns:
+            TimeSeries or dict: The per-day count series for *state*, or the
+            complete ``state_counts`` mapping when *state* is ``None``.
+        """
         if state is None:
             return self.state_counts
         return self.state_counts[state]
 
     def to_df(self):
+        """Convert simulation output to a :class:`pandas.DataFrame`.
 
+        Extends the parent :meth:`to_df` with additional test-related columns:
+        ``tests``, ``quarantine_tests``, ``sum_of_waiting``, and
+        ``all_positive_tests``.
+
+        Returns:
+            pandas.DataFrame: Combined state-count, increment, and test
+            statistics indexed by day.
+        """
         df = super().to_df()
         df = df.assign(
             tests=self.num_tests,
@@ -439,11 +577,24 @@ class SequentialEngine(SeirsPlusLikeEngine):
     #     print(df)
 
     def save_durations(self, f):
+        """Write per-state duration lists to an open file as CSV rows.
+
+        Each row contains the state label followed by comma-separated integer
+        durations (in days).
+
+        Args:
+            f (file-like): Open writable file object.
+        """
         for s in self.states:
             line = ",".join([str(x) for x in self.states_durations[s]])
             print(f"{self.state_str_dict[s]},{line}", file=f)
 
     def save_node_states(self, filename):
+        """Write the per-node state history to a CSV file.
+
+        Args:
+            filename (str): Destination file path.
+        """
         index = range(0, self.t+1)
         columns = self.states_history.values
         df = pd.DataFrame(columns, index=index)
@@ -453,6 +604,15 @@ class SequentialEngine(SeirsPlusLikeEngine):
         # print(df)
 
     def move_to_E(self, num):
+        """Randomly expose *num* susceptible nodes by moving them to state E.
+
+        Only nodes currently in S or S_s are eligible.  The operation
+        updates state counts, increments, membership arrays, and duration
+        tracking for the current day.
+
+        Args:
+            num (int): Number of nodes to expose.
+        """
         nodes = np.random.choice(self.num_nodes, num, replace=False)
         for node_number in nodes:
             orig_state = self.memberships[:, node_number].nonzero()[0][0]
@@ -471,6 +631,16 @@ class SequentialEngine(SeirsPlusLikeEngine):
             self.memberships[orig_state][node_number] = 0
 
     def move_to_R(self, nodes):
+        """Move a specific set of exposed nodes directly to the detected-recovered state.
+
+        Only nodes currently in state E are supported.
+
+        Args:
+            nodes (iterable of int): Node indices to move.
+
+        Raises:
+            ValueError: If any node in *nodes* is not currently in state E.
+        """
         for node_number in nodes:
             orig_state = self.memberships[:, node_number].nonzero()[0][0]
             if orig_state != STATES.E:
@@ -488,6 +658,15 @@ class SequentialEngine(SeirsPlusLikeEngine):
             self.memberships[orig_state][node_number] = 0
 
     def force_infect(self, nodes):
+        """Forcibly move a set of nodes to the symptomatic-infectious state I_s.
+
+        Dead nodes (D_d, D_u) are silently skipped.  All other nodes are
+        moved regardless of their current state.  Intended for scenario
+        seeding.
+
+        Args:
+            nodes (iterable of int): Node indices to infect.
+        """
         for node_number in nodes:
             orig_state = self.memberships[:, node_number].nonzero()[0][0]
             if orig_state in (STATES.D_d, STATES.D_u):
@@ -507,6 +686,19 @@ class SequentialEngine(SeirsPlusLikeEngine):
             self.memberships[orig_state][node_number] = 0
 
     def detected_node(self, node_number):
+        """Mark a node as detected (positive test) and transition it accordingly.
+
+        Maps the node's current undetected state to its detected counterpart
+        (e.g. E → E_d, I_s → I_ds).  If the node is already in a detected or
+        terminal state, the call is a no-op.  Also updates test-waiting
+        statistics.
+
+        Args:
+            node_number (int): Index of the node that tested positive.
+
+        Raises:
+            ValueError: If the node is in an unexpected state.
+        """
         # self.num_qtests[self.t] += 1
         orig_state = self.memberships[:, node_number].nonzero()[0][0]
 

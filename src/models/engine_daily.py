@@ -1,3 +1,10 @@
+"""Daily-batched Gillespie engine.
+
+This module defines :class:`DailyEngine`, which runs the Gillespie event
+selection intra-day but batches all state transitions to midnight, so the
+observable state changes once per simulated day.
+"""
+
 import numpy as np
 import scipy as scipy
 import scipy.integrate
@@ -9,18 +16,44 @@ from models.engine_seirspluslike import SeirsPlusLikeEngine
 
 
 class DailyEngine(SeirsPlusLikeEngine):
-    """ should work in the same way like SEIRSPlusLikeEngine
-    but makes the state changes only once a day """
+    """Gillespie engine that applies state transitions only at midnight.
+
+    Inherits from :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`.
+    During the day the engine collects proposed transitions in a to-do list;
+    at midnight (:meth:`update_states` / :meth:`midnight`) the transitions are
+    committed in bulk, ensuring the observable model state changes only once
+    per day.
+    """
 
     def inicialization(self):
+        """Initialise engine and allocate the daily to-do lists.
 
+        Creates empty ``self.todo_list`` and ``self.todo_t`` accumulators
+        before delegating to the parent initialiser.
+        """
         self.todo_list = []
         self.todo_t = []
 
         super().inicialization()
 
     def run_iteration(self, alpha, cumsum, transition_types):
+        """Sample the next Gillespie event and add it to the pending to-do list.
 
+        Does *not* apply the transition immediately; it is deferred to the
+        next call to :meth:`update_states`.  At most one pending transition
+        per node is kept (first-event-wins within a day).
+
+        Args:
+            alpha (float): Total propensity (sum of all propensities).
+            cumsum (numpy.ndarray): Cumulative-sum vector over flattened
+                propensities, used for event selection.
+            transition_types (list): Ordered list of ``(from_state,
+                to_state)`` tuples matching the propensity order.
+
+        Returns:
+            bool: Always ``True`` (day-level termination is handled by
+            :meth:`run`).
+        """
         # 1. Generate 2 random numbers uniformly distributed in (0,1)
         r1 = np.random.rand()
         r2 = np.random.rand()
@@ -50,6 +83,12 @@ class DailyEngine(SeirsPlusLikeEngine):
         return True
 
     def update_states(self):
+        """Commit all pending transitions accumulated during the current day.
+
+        Iterates ``self.todo_list`` and applies each transition by updating
+        ``self.memberships``, ``self.state_counts``, ``self.history``, and
+        ``self.N``.  Clears the to-do lists afterwards.
+        """
         #        print("updating states")
         # for t, (transition_node, transition_type) in zip(self.todo_t, self.todo_list):
         #     print(t, transition_node, "-->", transition_type)
@@ -83,6 +122,20 @@ class DailyEngine(SeirsPlusLikeEngine):
         self.todo_t = []
 
     def midnight(self, verbose):
+        """Execute end-of-day actions: commit transitions and recalculate propensities.
+
+        Calls :meth:`update_states` to apply all pending transitions, fires
+        ``self.periodic_update_callback`` if set (updating the graph if the
+        callback returns a new one), then recomputes propensities for the next
+        day via :meth:`propensities_recalc`.
+
+        Args:
+            verbose (bool): Passed through (currently unused).
+
+        Returns:
+            tuple: ``(alpha, cumsum, has_events, transition_types)`` as
+            returned by :meth:`propensities_recalc`.
+        """
         self.update_states()
 
         # run periodical update
@@ -97,6 +150,12 @@ class DailyEngine(SeirsPlusLikeEngine):
         return self.propensities_recalc()
 
     def print(self, verbose=False):
+        """Print the current simulation time and optionally per-state counts.
+
+        Args:
+            verbose (bool, optional): If ``True``, also print per-state
+                counts. Defaults to ``False``.
+        """
         print("t = %.2f" % self.t)
         if verbose:
             for state in self.states:
@@ -104,6 +163,19 @@ class DailyEngine(SeirsPlusLikeEngine):
                 print(flush=True)
 
     def propensities_recalc(self):
+        """Recalculate propensities and return flattened cumulative-sum data.
+
+        Returns:
+            tuple: A 4-tuple ``(alpha, cumsum, has_events, transition_types)``
+            where:
+
+            * ``alpha`` (float) – total propensity.
+            * ``cumsum`` (numpy.ndarray) – cumulative sum of flattened
+              propensity array.
+            * ``has_events`` (bool) – ``True`` if total propensity is > 0.
+            * ``transition_types`` (list) – ordered ``(from, to)`` transition
+              pairs.
+        """
         # 2. Calculate propensities
         propensities = np.hstack(self.calc_propensities())
         transition_types = self.transitions
@@ -116,7 +188,22 @@ class DailyEngine(SeirsPlusLikeEngine):
         return alpha, cumsum, propensities.sum() > 0.0, transition_types
 
     def run(self, T, print_interval=10, verbose=False):
+        """Run the daily-batched simulation for up to *T* time units.
 
+        Calls :meth:`propensities_recalc` once at the start, then loops over
+        :meth:`run_iteration`.  At each midnight calls :meth:`midnight` to
+        commit transitions and recompute propensities.
+
+        Args:
+            T (int or float): Duration to simulate.
+            print_interval (int, optional): Print status every this many
+                days. Defaults to ``10``.
+            verbose (bool, optional): If ``True``, include per-state detail in
+                progress messages. Defaults to ``False``.
+
+        Returns:
+            bool: ``True`` on completion, ``False`` if *T* <= 0.
+        """
         if not T > 0:
             return False
 

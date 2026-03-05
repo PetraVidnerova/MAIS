@@ -1,9 +1,29 @@
-import numpy as  np 
+"""Quarantine and risk coefficients for the MAIS epidemic simulation.
 
+This module defines default quarantine coefficients (``QUARANTINE_COEFS``)
+and a collection of per-layer riskiness arrays (``RISK_FOR_LAYERS_*``)
+that govern how strongly each contact layer contributes to transmission
+during various intervention scenarios.
+
+The coefficients are keyed by layer index.  Each layer corresponds to a
+specific type of social contact (family, school, work, leisure, etc.).
+Quarantine coefficients are preferably provided via the graph object;
+the values defined here serve as defaults.
+
+Module-level constants:
+    QUARANTINE_COEFS (dict): Default quarantine multipliers per layer
+        (0 = fully suppressed, 1 = no change).
+    RISK_FOR_LAYERS (numpy.ndarray): Default riskiness array (80 %
+        for school/work, lower for leisure).
+    RISK_FOR_LAYERS_60 (numpy.ndarray): 60 % riskiness variant.
+    RISK_FOR_LAYERS_10 (numpy.ndarray): 10 % riskiness variant.
+    RISK_FOR_LAYERS_30 (numpy.ndarray): 30 % riskiness variant.
+    RISK_FOR_LAYERS_MINI (numpy.ndarray): Minimal riskiness (family only).
+    RISK_FOR_LAYERS_MAX (numpy.ndarray): Maximum riskiness (all layers = 1).
+    LAYER_GROUPS (dict): Mapping from group name to list of layer indices.
 """
-Quarantine coeficients are prefered to be provided with graph.
-These are default cofficitients. 
-"""
+
+import numpy as  np
 
 QUARANTINE_COEFS = {
     0:  1.0,  # family_inside
@@ -45,10 +65,20 @@ QUARANTINE_COEFS = {
 
 
 def dict2risk(rdict):
+    """Convert a layer-index-to-risk dictionary to a fixed-length numpy array.
+
+    Args:
+        rdict (dict): Mapping from integer layer index to risk value
+            (float in [0, 1]).
+
+    Returns:
+        numpy.ndarray: Array of length 36 (dtype float) where position
+        ``i`` holds the risk value for layer ``i``.
+    """
     ret = np.empty(36, dtype=float)
     for key, value in rdict.items():
-        ret[key] = value 
-    return ret 
+        ret[key] = value
+    return ret
 
 #RISK_FOR_LAYERS = None
 RISK_FOR_LAYERS = dict2risk({
@@ -292,6 +322,28 @@ LAYER_GROUPS = {
 }
 
 def get_riskiness(graph, family, work, leasure, rest=0.0):
+    """Build a per-layer riskiness array from group-level risk values.
+
+    The function maps scalar risk values onto their respective layer
+    groups (family, school/work, leisure, rest) using the group
+    definitions stored on the graph or, if absent, the module-level
+    ``LAYER_GROUPS`` default.
+
+    Args:
+        graph: The contact network graph object.  Must expose
+            ``layer_name`` (sequence) and optionally ``LAYER_GROUPS``
+            (dict mapping group names to layer index lists).
+        family (float): Risk multiplier for family-contact layers
+            (value in [0, 1]).
+        work (float): Risk multiplier for school/work layers.
+        leasure (float): Risk multiplier for leisure layers.
+        rest (float): Risk multiplier for all remaining layers.
+            Defaults to 0.0.
+
+    Returns:
+        numpy.ndarray: Array of length ``len(graph.layer_name)`` with
+        per-layer risk values assigned according to the group mapping.
+    """
     ret = np.zeros(len(graph.layer_name), dtype=float)
     if graph.LAYER_GROUPS is not None:
         lg = graph.LAYER_GROUPS

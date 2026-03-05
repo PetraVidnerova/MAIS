@@ -1,3 +1,17 @@
+"""Highly configurable custom policy for the MAIS epidemic simulation.
+
+This module provides :class:`CustomPolicy`, the primary policy used in
+production simulations.  It orchestrates:
+
+* Layer-weight changes read from a scenario calendar file.
+* Model parameter changes (beta, theta, test rate).
+* Face-mask effectiveness updates.
+* Superspreader event toggling.
+* Forced infections on a specified day.
+* Daily background import of exposed individuals.
+* Dynamic start/stop of sub-policies loaded by name.
+"""
+
 import pandas as pd
 import numpy as np
 import json
@@ -9,7 +23,19 @@ from utils.policy_utils import load_scenario_dict
 
 
 def _load_dictionary(filename: str):
+    """Load a time-indexed dictionary from a JSON or CSV file.
 
+    JSON files are expected to be objects with string keys (simulation
+    day numbers) and arbitrary values.  CSV files must have a ``T``
+    column and a second column whose values are used.
+
+    Args:
+        filename (str or None): Path to the file, or ``None``.
+
+    Returns:
+        dict or None: Mapping from ``int`` day to the corresponding
+        value, or ``None`` if ``filename`` is ``None``.
+    """
     if filename is None:
         return None
     if filename.endswith(".json"):
@@ -25,9 +51,64 @@ def _load_dictionary(filename: str):
 
 class CustomPolicy(Policy):
 
-    """
-    This is the policy that is intended to be highly configurable by a user.
-    It controls weights of layers, parameters of model, and is responsible for running subpolicies.
+    """Highly configurable orchestration policy for MAIS simulations.
+
+    Controls layer weights, model parameters (beta, theta, test rate),
+    face-mask effectiveness, superspreader events, forced infections,
+    background import of exposed individuals, and the lifecycle of
+    dynamically loaded sub-policies.
+
+    All time-indexed inputs are read from external files (JSON or CSV)
+    keyed on integer simulation-day numbers.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        layer_changes_filename (str, optional): Path to a scenario
+            calendar file for layer-weight updates.
+        param_changes_filename (str, optional): Temporarily disabled.
+            Path to a JSON file of model-parameter changes.
+        policy_calendar_filename (str, optional): Path to a JSON file
+            mapping simulation days to ``[action, policy_string]``
+            pairs for starting/stopping sub-policies.
+        beta_factor_filename (str, optional): Path to a
+            JSON/CSV file with per-day beta-factor multipliers.
+        face_masks_filename (str, optional): Path to a JSON/CSV file
+            with per-day face-mask compliance values.
+        theta_filename (str, optional): Path to a JSON/CSV file with
+            per-day ``theta_Is`` multipliers.
+        test_rate_filename (str, optional): Path to a JSON/CSV file
+            with per-day test-rate multipliers.
+        superspreader_date (int or str, optional): Simulation day on
+            which the superspreader layer is activated (one day only).
+        superspreader_layer (int or str, optional): Index of the
+            superspreader layer (default 31).
+        force_infect (int or str, optional): Simulation day on which
+            one node on ``force_infect_layer`` is forcibly infected.
+        force_infect_layer (int or str, optional): Layer index used to
+            select the node for forced infection.
+        init_filename (str, optional): Path to a JSON file mapping days
+            to the number of nodes moved to state E on that day.
+        reduction_coef1 (float or str): Required.  Primary beta
+            reduction coefficient (face-mask effect on non-family
+            contacts).
+        reduction_coef2 (float or str): Required.  Secondary beta
+            reduction coefficient (face-mask spillover into family).
+        new_beta (str, optional): ``"Yes"`` to use the updated beta
+            calculation combining face-mask compliance and beta factors.
+        daily_import (float or str, optional): Daily probability of
+            importing one exposed individual (value in [0, 1]).
+        **kwargs: Sub-policy keyword arguments.  Pass
+            ``sub_policies`` (list of names) together with
+            ``<name>_filename``, ``<name>_name``, and optionally
+            ``<name>_config`` for each sub-policy.
+
+    Raises:
+        ValueError: If ``param_changes_filename`` is provided (temporarily
+            disabled), if an unknown action is found in the policy
+            calendar, if ``new_beta=Yes`` but the required calendars are
+            absent or mismatched, or if ``reduction_coef1``/
+            ``reduction_coef2`` are missing.
     """
 
     def __init__(self,
@@ -50,6 +131,45 @@ class CustomPolicy(Policy):
                  new_beta=None,
                  daily_import=None,
                  **kwargs):
+        """Initialise the custom policy from file-based calendars and keyword arguments.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            layer_changes_filename (str, optional): Layer-weight
+                scenario calendar file.
+            param_changes_filename (str, optional): Temporarily
+                disabled model-parameter changes file.
+            policy_calendar_filename (str, optional): Sub-policy
+                lifecycle calendar file.
+            beta_factor_filename (str, optional): Beta-factor calendar
+                file.
+            face_masks_filename (str, optional): Face-mask compliance
+                calendar file.
+            theta_filename (str, optional): ``theta_Is`` multiplier
+                calendar file.
+            test_rate_filename (str, optional): Test-rate multiplier
+                calendar file.
+            superspreader_date (int or str, optional): Day to activate
+                superspreader layer.
+            superspreader_layer (int or str, optional): Superspreader
+                layer index.
+            force_infect (int or str, optional): Day for forced
+                infection.
+            force_infect_layer (int or str, optional): Layer for
+                selecting the force-infected node.
+            init_filename (str, optional): Initial exposure calendar
+                file.
+            reduction_coef1 (float or str): Primary beta reduction
+                coefficient (required).
+            reduction_coef2 (float or str): Secondary beta reduction
+                coefficient (required).
+            new_beta (str, optional): ``"Yes"`` to use new beta
+                calculation.
+            daily_import (float or str, optional): Daily import
+                probability.
+            **kwargs: Sub-policy configuration keyword arguments.
+        """
         super().__init__(graph, model)
 
         if layer_changes_filename is not None:
@@ -161,6 +281,18 @@ class CustomPolicy(Policy):
                     filename, class_name, config)
 
     def create_policy(self, filename, object_name, config_file=None):
+        """Dynamically import and instantiate a policy class by module and name.
+
+        Args:
+            filename (str): Module name within the ``policies`` package
+                (e.g. ``"contact_tracing"``).
+            object_name (str): Class name within that module.
+            config_file (str, optional): Path to a configuration file
+                to pass to the policy constructor.
+
+        Returns:
+            Policy: An instantiated policy object.
+        """
         PolicyClass = getattr(
             __import__(
                 "policies."+filename,
@@ -176,18 +308,34 @@ class CustomPolicy(Policy):
             return PolicyClass(self.graph, self.model)
 
     def update_layers(self, coefs):
+        """Update graph layer weights to the provided coefficient values.
+
+        Args:
+            coefs: Iterable of new layer-weight values passed directly
+                to ``graph.set_layer_weights``.
+        """
         self.graph.set_layer_weights(coefs)
 
     def switch_on_superspread(self):
+        """Activate the superspreader layer by setting its weight to 1.0."""
         logging.info("DBG Superspreader ON")
         self.graph.layer_weights[self.superspreader_layer] = 1.0
 
     def switch_off_superspread(self):
+        """Deactivate the superspreader layer by setting its weight to 0.0."""
         logging.info("DBG Superspreader OFF")
         self.graph.layer_weights[self.superspreader_layer] = 0.0
 
     def update_beta(self, masks):
+        """Update model beta values based on face-mask compliance (legacy method).
 
+        Scales non-family beta by ``(1 - reduction_coef1 * masks)`` and
+        family beta by a secondary factor derived from the non-family
+        reduction.
+
+        Args:
+            masks (float): Current face-mask compliance level in [0, 1].
+        """
         orig_beta = self.model.init_kwargs["beta"]
         orig_beta_A = self.model.init_kwargs["beta_A"]
 
@@ -214,7 +362,19 @@ class CustomPolicy(Policy):
         logging.debug(f"DBG beta: {self.model.beta[0][0]} {self.model.beta_in_family[0][0]}")
 
     def update_beta2(self, masks, beta_factors=None):
+        """Update model beta values using both face-mask compliance and beta factors.
 
+        Family beta is reduced by ``(1 - reduction_coef1 * beta_factors)``.
+        Non-family beta is then derived as
+        ``(1 - reduction_coef2 * masks) * family_beta``.
+
+        Args:
+            masks (float): Current face-mask compliance in [0, 1].
+            beta_factors (float): Additional beta scaling factor.
+
+        Raises:
+            AssertionError: If ``beta_factors`` is ``None``.
+        """
         assert beta_factors is not None
 
         orig_beta_in_family = self.model.init_kwargs["beta_in_family"]
@@ -244,7 +404,11 @@ class CustomPolicy(Policy):
         logging.debug(f"DBG beta: {self.model.beta[0][0]} {self.model.beta_A[0][0]}")
 
     def beta_increase(self):
+        """Increase all beta values by a factor of 1.5 (mutation simulation).
 
+        Sets ``mutation_coef`` to 1.5 and scales ``beta``, ``beta_A``,
+        ``beta_A_in_family``, and ``beta_in_family`` accordingly.
+        """
         self.mutation_coef = 1.5
 
         orig_value = self.model.beta[0][0]
@@ -260,12 +424,24 @@ class CustomPolicy(Policy):
         self.model.beta_in_family.fill(self.mutation_coef*orig_value)
 
     def update_test_rate(self, coef):
+        """Scale the testing rate (theta_Is) by a given coefficient.
+
+        Args:
+            coef (float): Multiplier applied to the original test rate
+                from ``model.init_kwargs``.
+        """
         orig_test_rate = self.model.init_kwargs["test_rate"]
         new_value = coef * orig_test_rate
         #self.model.test_rate = new_value
         self.model.theta_Is.fill(new_value)
 
     def update_theta(self, coef):
+        """Scale the symptomatic testing probability (theta_Is) by a coefficient.
+
+        Args:
+            coef (float): Multiplier applied to the original
+                ``theta_Is`` value from ``model.init_kwargs``.
+        """
         orig_theta = self.model.init_kwargs["theta_Is"]
         new_value = orig_theta * coef
         self.model.theta_Is.fill(new_value)
@@ -279,7 +455,14 @@ class CustomPolicy(Policy):
         logging.debug(f"DBG theta: {self.model.theta_Is[0][0]}")
 
     def run(self):
+        """Execute one time-step of the custom policy.
 
+        Processes all registered calendars in order:
+        initial exposures, daily import, policy-calendar events,
+        parameter changes, layer updates, forced infections,
+        superspreader toggling, face-mask updates, theta updates,
+        test-rate updates, and finally runs all active sub-policies.
+        """
         if False and self.graph.is_quarantined is not None:
             # dbg check
             all_deposited = np.zeros(self.graph.number_of_nodes)
@@ -398,6 +581,13 @@ class CustomPolicy(Policy):
             policy.run()
 
     def to_df(self):
+        """Merge and return DataFrames from all active sub-policies.
+
+        Returns:
+            pandas.DataFrame or None: Outer-merged DataFrame indexed by
+            ``T`` combining statistics from all sub-policies, or
+            ``None`` if there are no sub-policies or none produce data.
+        """
         if not self.policies:
             return None
 

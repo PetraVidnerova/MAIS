@@ -1,3 +1,21 @@
+"""Extended SEIRS network model definition.
+
+This module defines the full epidemiological compartment model used in the
+MAIS project (``ExtendedNetworkModel`` and its variants).  It contains:
+
+* :class:`STATES` – integer compartment codes and the ``detected`` subset.
+* ``state_codes`` – human-readable label mapping.
+* ``model_definition`` – the complete model specification dict (states,
+  transitions, parameters).
+* :func:`calc_propensities` – per-node daily transition-probability function.
+* Four model classes created via :func:`~models.model.create_custom_model`:
+
+  * ``ExtendedNetworkModel`` – Gillespie (continuous-time) engine.
+  * ``ExtendedDailyNetworkModel`` – daily-batched Gillespie engine.
+  * ``ExtendedSequentialNetworkModel`` – discrete-step sequential engine.
+  * ``TGMNetworkModel`` – multi-layer-graph engine (EngineM).
+"""
+
 import numpy as np
 from models.model import create_custom_model
 from models.engine_daily import DailyEngine
@@ -12,6 +30,29 @@ from models.engine_m import EngineM
 
 
 class STATES():
+    """Extended state codes including detected variants of every compartment.
+
+    Attributes:
+        S (int): Susceptible.
+        S_s (int): Susceptible with false symptoms.
+        E (int): Exposed.
+        I_n (int): Infectious, asymptomatic non-symptomatic track.
+        I_a (int): Infectious, pre-symptomatic.
+        I_s (int): Infectious, symptomatic.
+        I_ds (int): Infectious, symptomatic, detected.
+        J_s (int): Post-infectious, symptomatic.
+        J_n (int): Post-infectious, asymptomatic.
+        E_d (int): Exposed, detected.
+        I_da (int): Infectious, pre-symptomatic, detected.
+        I_dn (int): Infectious, asymptomatic, detected.
+        J_ds (int): Post-infectious, symptomatic, detected.
+        J_dn (int): Post-infectious, asymptomatic, detected.
+        R_d (int): Recovered, detected.
+        R_u (int): Recovered, undetected.
+        D_d (int): Dead, detected.
+        D_u (int): Dead, undetected.
+        detected (set): Subset of state codes that are in a detected state.
+    """
     S = 0
     S_s = 1
     E = 2
@@ -243,7 +284,33 @@ model_definition = {
 
 
 def calc_propensities(model, use_dict=True):
+    """Compute per-node daily transition probabilities for the extended model.
 
+    Returns a list of propensity arrays (one per transition) ordered to match
+    ``model.transitions``.  Each array has shape ``(num_nodes, 1)`` with
+    values in ``[0, 1]`` representing the probability that each node undergoes
+    the corresponding transition on the current day.
+
+    The function:
+
+    1. Calls ``model.prob_of_contact`` to obtain the per-node infection
+       probability ``P1`` from network contacts, and combines it with a
+       mass-action term ``P2`` (controlled by ``model.p``).
+    2. Computes propensities for every state → state transition defined in
+       ``model.transitions``, taking into account testing rates, detection
+       probabilities, symptom development, and mortality.
+    3. Ensures each node's propensities sum to 1 (clip to ``[0, 1]``).
+
+    Args:
+        model: Active simulation-model instance with all parameters and
+            membership arrays set.
+        use_dict (bool, optional): Unused parameter retained for API
+            compatibility. Defaults to ``True``.
+
+    Returns:
+        list of numpy.ndarray: One propensity array per transition, each of
+        shape ``(num_nodes, 1)``.
+    """
     # STEP 1
     # pre-calculate matrix multiplication terms that may be used in multiple propensity calculations,
     # and check to see if their computation is necessary before doing the multiplication

@@ -1,5 +1,13 @@
 # NOTE: This is the older version used for TGMNetworkModel, not maintained now.
 
+"""Legacy self-isolation policy for TGMNetworkModel (unmaintained).
+
+This module provides the original :class:`WeeColdPolicy` that causes
+symptomatic individuals to self-isolate with a configurable probability.
+It is written for the older TGMNetworkModel and is **not maintained**.
+Prefer :mod:`policies.wee_cold_sim` for current simulations.
+"""
+
 import numpy as np
 import pandas as pd
 from extended_network_model import STATES as states
@@ -13,11 +21,26 @@ import logging
 
 class WeeColdPolicy(Policy):
 
-    """ 
-    Self isolation policy.
+    """Self-isolation policy for symptomatic individuals (legacy TGMNetworkModel).
+
+    When a node transitions to the symptomatic state ``I_s`` during a
+    day, it self-isolates with probability ``threshold``.  Isolated
+    nodes are quarantined for ``duration`` days.  At the end of the
+    quarantine period, nodes still symptomatic are kept for one
+    additional day; asymptomatic nodes are released.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance (TGMNetworkModel).
     """
 
     def __init__(self, graph, model):
+        """Initialise the self-isolation policy with default parameters.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+        """
         super().__init__(graph, model)
 
         # depo of quarantined nodes
@@ -28,14 +51,27 @@ class WeeColdPolicy(Policy):
         self.coefs = QUARANTINE_COEFS
 
     def to_df(self):
+        """Return ``None`` (no statistics collected by this policy).
+
+        Returns:
+            None
+        """
         return None
 
     def stop(self):
-        """ just finish necessary, but do not qurantine new nodes """
+        """Signal the policy to stop quarantining new nodes.
+
+        After calling ``stop``, ongoing quarantines are still managed
+        but no new symptomatic nodes are quarantined.
+        """
         self.stopped = True
 
     def quarantine_nodes(self, detected_nodes):
-        """ insert nodes into the depo and make modifications in a graph """
+        """Place detected nodes into quarantine and suppress their graph layers.
+
+        Args:
+            detected_nodes (list): Node indices to quarantine.
+        """
         if detected_nodes:
             assert self.coefs is not None
             self.graph.modify_layers_for_nodes(detected_nodes,
@@ -43,18 +79,31 @@ class WeeColdPolicy(Policy):
             self.depo.lock_up(detected_nodes, self.duration)
 
     def tick(self):
-        """ update time and return released """
+        """Advance the deposit by one day and return released nodes.
+
+        Returns:
+            numpy.ndarray: Indices of nodes released from quarantine today.
+        """
         released = self.depo.tick_and_get_released()
         return released
 
     def release_nodes(self, released):
-        """ update graph for nodes that are released """
+        """Restore graph edges for nodes leaving quarantine.
+
+        Args:
+            released (numpy.ndarray): Indices of nodes to release.
+        """
         if len(released) > 0:
             logging.info(f"DBG {type(self).__name__} Released nodes: {released}")
             self.graph.recover_edges_for_nodes(released)
 
     def get_last_day(self):
-        """ get the part of model history corresponding to the current (last) day """
+        """Return the model-history slice for the current simulation day.
+
+        Returns:
+            list: Entries from ``model.history`` within the interval
+            ``[current_day, current_day + 1)``.
+        """
         current_day = int(self.model.t)
         start = np.searchsorted(
             self.model.tseries[:self.model.tidx+1], current_day, side="left")
@@ -65,7 +114,13 @@ class WeeColdPolicy(Policy):
         return self.model.history[start:end]
 
     def run(self):
+        """Execute one time-step of the self-isolation policy.
 
+        Identifies nodes that became symptomatic today, applies the
+        ``threshold`` coin-flip to decide who self-isolates, then
+        advances the deposit and releases or extends quarantine for
+        nodes whose isolation period has elapsed.
+        """
         if self.stopped == True:
             return
 
@@ -107,4 +162,13 @@ class WeeColdPolicy(Policy):
                 self.release_nodes(ready_to_leave)
 
     def is_I_s(self, node_ids):
+        """Check whether nodes are currently in the symptomatic state I_s.
+
+        Args:
+            node_ids (numpy.ndarray): Indices of nodes to check.
+
+        Returns:
+            numpy.ndarray: Boolean array; ``True`` for nodes in state
+            ``I_s``.
+        """
         return self.model.memberships[states.I_s].ravel()[node_ids] == 1

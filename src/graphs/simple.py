@@ -1,18 +1,39 @@
+"""Minimal directed graph for information-spread models.
+
+This module provides :class:`SimpleGraph`, a lightweight directed graph
+representation designed for information models (e.g. opinion dynamics,
+rumour spreading) where edges are oriented and all transmission probabilities
+are uniform.  The graph is stored as two NumPy arrays—one for edge sources
+and one for edge destinations—keeping memory overhead minimal.
+"""
+
 from copy import copy
 import logging
 import numpy as np
 import pandas as pd
-import tqdm 
+import tqdm
 from scipy.sparse import csr_matrix, lil_matrix
 
 
 class SimpleGraph:
+    """Lightweight directed graph for information models.
 
-    """
-    Graph for mainly for information models, 
-    especially for simple ones.
-    Graph has only edges, that are oriented.
-    Probabilities of edges are uniform. 
+    The graph stores only directed edges (no layer information, no
+    per-edge probabilities) as two NumPy arrays of source and destination
+    node indices.  This is sufficient for simple information/opinion models
+    where all contacts are equally likely to transmit.
+
+    Attributes:
+        random_seed (int or None): Seed supplied at construction, stored for
+            reproducibility bookkeeping.
+        e_source (numpy.ndarray): Source node index for each edge.
+        e_dest (numpy.ndarray): Destination node index for each edge.
+        num_nodes (int): Total number of nodes inferred from the maximum
+            node index seen in the edge list.
+
+    Args:
+        random_seed (int, optional): Seed for NumPy's random number
+            generator.  ``None`` leaves the global RNG state unchanged.
     """
 
     def __init__(self, random_seed=None):
@@ -22,9 +43,19 @@ class SimpleGraph:
 
     def read_csv(self,
                  path_to_edges='edges.csv'):
+        """Load a directed edge list from a CSV (or whitespace-separated) file.
 
-        csv_hacking = {'na_values': 'undef', 'skipinitialspace': True}        
-        edges = pd.read_csv(path_to_edges, 
+        The file must contain exactly two columns—source node and destination
+        node—either comma- or whitespace-separated, with no header row.
+        Self-loops are dropped with a warning logged at the WARNING level.
+        The node count is inferred as ``max(source, dest) + 1``.
+
+        Args:
+            path_to_edges (str): Path to the edge-list file.
+                Defaults to ``'edges.csv'``.
+        """
+        csv_hacking = {'na_values': 'undef', 'skipinitialspace': True}
+        edges = pd.read_csv(path_to_edges,
                             header=None,
                             sep=r",|\s+",
                             engine='python',
@@ -58,16 +89,24 @@ class SimpleGraph:
         
     @property
     def number_of_nodes(self):
+        """Total number of nodes in the graph.
+
+        Returns:
+            int: Number of nodes (inferred from the maximum node index in
+            the edge list, plus one).
+        """
         return self.num_nodes
 
 
     def copy(self):
-        """
-        Optimized version of shallow/deepcopy of self.
-        Since most fields never change between runs, we do shallow copies on them.
-        :return: Shallow/deep copy of self.
+        """Return a shallow copy of the graph.
 
-        --> not needed for simple graph, use simple shallow copy
+        Because :class:`SimpleGraph` has no mutable run-time state (unlike
+        :class:`~graphs.light.LightGraph`) a plain shallow copy is sufficient
+        to produce an independent graph object for a new simulation run.
+
+        Returns:
+            SimpleGraph: A shallow copy of ``self``.
         """
         return copy(self)
 

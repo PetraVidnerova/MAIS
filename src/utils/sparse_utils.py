@@ -1,3 +1,15 @@
+"""Sparse-matrix utility functions for the MAIS simulation.
+
+This module is no longer used in current versions of the model. It was
+originally used when a contact graph was compressed into a sparse matrix
+where multi-edges were aggregated into single weighted entries.
+
+The functions operate on SciPy CSR/CSC sparse matrices and provide
+element-wise row/column scaling, row/column product aggregation, and a
+specialised element-wise multiplication that treats structurally-zero entries
+as ones (useful for probability-complement arithmetic).
+"""
+
 # this is not used in a new versions of a model
 # was used when a grah was compressed into a matrix (multi-edges were aggregated)
 
@@ -6,9 +18,21 @@ import scipy.sparse as sparse
 
 
 def multiply_row(A, row_idx, alpha, trunc=False):
-    '''
-    multiply values in row_idx in place
-    '''
+    """Scale all stored values in a single row of a CSR matrix in place.
+
+    Only the explicitly stored (non-zero) entries in the row are affected.
+    Structural zeros are untouched.
+
+    Args:
+        A (scipy.sparse.csr_matrix): The sparse matrix to modify in place.
+            Must be in CSR format.
+        row_idx (int): Zero-based index of the row to scale.
+        alpha (float): Scalar multiplier applied to every stored entry in the
+            specified row.
+        trunc (bool, optional): If ``True``, the scaled values are clipped to
+            the interval ``[0.0, 1.0]`` after multiplication. Defaults to
+            ``False``.
+    """
 
     idx_start_row = A.indptr[row_idx]
     idx_end_row = A.indptr[row_idx + 1]
@@ -22,9 +46,21 @@ def multiply_row(A, row_idx, alpha, trunc=False):
 
 
 def multiply_col(A, col_idx, alpha, trunc=False):
-    '''
-    multiply values in col_idx in place
-    '''
+    """Scale all stored values in a single column of a CSR matrix in place.
+
+    Locates every explicitly stored entry in the given column and multiplies
+    it by ``alpha``. Works on CSR format by scanning the ``indices`` array.
+
+    Args:
+        A (scipy.sparse.csr_matrix): The sparse matrix to modify in place.
+            Must be in CSR format.
+        col_idx (int): Zero-based index of the column to scale.
+        alpha (float): Scalar multiplier applied to every stored entry in the
+            specified column.
+        trunc (bool, optional): If ``True``, the scaled values are clipped to
+            the interval ``[0.0, 1.0]`` after multiplication. Defaults to
+            ``False``.
+    """
     col_indices = A.indices == col_idx
     A.data[col_indices] = (alpha * A.data[col_indices])
     if trunc:
@@ -32,6 +68,20 @@ def multiply_col(A, col_idx, alpha, trunc=False):
 
 
 def prop_of_row(A):
+    """Compute the product of stored values in each row of a CSR matrix.
+
+    For each row the function multiplies all explicitly stored (non-zero)
+    entries together. Rows with no stored entries retain a product of ``1.0``
+    (identity for multiplication), which corresponds to the convention that
+    missing entries represent the value 1.
+
+    Args:
+        A (scipy.sparse.csr_matrix): Input sparse matrix in CSR format.
+
+    Returns:
+        numpy.ndarray: A 1-D array of shape ``(A.shape[0],)`` where element
+        ``i`` is the product of all stored values in row ``i``.
+    """
 
     result = np.ones(A.shape[0])
 
@@ -48,6 +98,19 @@ def prop_of_row(A):
 
 
 def prop_of_column(A):
+    """Compute the product of stored values in each column of a CSR matrix.
+
+    For each unique column index present in the matrix the function multiplies
+    all explicitly stored entries in that column. Columns with no stored
+    entries retain a product of ``1.0``.
+
+    Args:
+        A (scipy.sparse.csr_matrix): Input sparse matrix in CSR format.
+
+    Returns:
+        numpy.ndarray: A 1-D array of shape ``(A.shape[1],)`` where element
+        ``j`` is the product of all stored values in column ``j``.
+    """
 
     result = np.ones(A.shape[1])
     col_indices = A.indices
@@ -63,6 +126,31 @@ def prop_of_column(A):
 
 
 def multiply_zeros_as_ones(a, b):
+    """Element-wise multiply two sparse matrices treating structural zeros as ones.
+
+    Standard sparse element-wise multiplication treats structurally-zero
+    positions as ``0 * 0 = 0``. This function instead treats a missing entry
+    (structural zero) in *either* matrix as the value ``1.0``, so that:
+
+    - positions present in both ``a`` and ``b`` → ``a[i,j] * b[i,j]``
+    - positions present only in ``a``             → ``a[i,j]``  (b treated as 1)
+    - positions present only in ``b``             → ``b[i,j]``  (a treated as 1)
+    - positions absent in both                    → ``0``  (stored as structural zero)
+
+    This is useful for computing the joint probability of *no contact* across
+    multiple probability layers, where an absent entry means "no edge, hence
+    probability 1 of no contact on this layer".
+
+    Args:
+        a (scipy.sparse.csr_matrix): First sparse matrix.
+        b (scipy.sparse.csr_matrix): Second sparse matrix. Must have the same
+            shape as ``a``.
+
+    Returns:
+        scipy.sparse.csr_matrix: Result matrix with the same shape as ``a``
+        and ``b``, where element-wise multiplication respects the
+        zeros-as-ones convention described above.
+    """
     c = a.minimum(b)
     r, c = c.nonzero()
 

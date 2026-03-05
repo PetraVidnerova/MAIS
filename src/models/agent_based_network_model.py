@@ -1,3 +1,19 @@
+"""Agent-based epidemic network model (SimulationDrivenModel).
+
+This module defines :class:`SimulationDrivenModel`, the primary agent-based
+epidemiological model of the MAIS project.  It inherits from
+:class:`~models.simulation_engine.SimulationEngine` and implements:
+
+* Stochastic duration sampling for every disease stage using pre-loaded
+  probability distributions (JSON file).
+* Age- and sex-stratified mortality via a CSV death-probability table.
+* Network-contact infection via :func:`~models.prob_infection.prob_of_contact`.
+* Support for external (EXT) nodes with controllable edge activity.
+* Utility methods for scenario manipulation (``move_to_E``, ``move_to_R``,
+  etc.) and output statistics (``df_source_infection``,
+  ``df_source_nodes``).
+"""
+
 import json
 import numpy as np
 import pandas as pd
@@ -17,6 +33,22 @@ import utils.global_configs as global_configs
 
 
 class SimulationDrivenModel(SimulationEngine):
+    """Agent-based SEIR-variant epidemic model with stochastic duration sampling.
+
+    Each agent (network node) progresses through disease compartments with
+    durations drawn from empirical distributions.  Key features:
+
+    * Compartments: S, S_s, E, I_n, I_a, I_s, J_s, J_n, R, D, EXT.
+    * Duration distributions loaded from a JSON file at initialisation.
+    * Age/sex-stratified case-fatality rates from a CSV file.
+    * Daily infection driven by
+      :func:`~models.prob_infection.prob_of_contact`.
+    * Optional external-node mechanism (EXT state) with probabilistic edge
+      activation.
+
+    Class-level attributes define the model structure (states, transitions,
+    parameters).  All are overridable by subclasses.
+    """
 
     states = [
         STATES.S,
@@ -114,7 +146,20 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def inicialization(self):
+        """Initialise the model: set derived beta parameters, load duration and death data.
 
+        Before calling the parent initialiser, sets ``beta_in_family``,
+        ``beta_A``, and ``beta_A_in_family`` in ``init_kwargs`` based on the
+        supplied ``beta`` and ``beta_reduction``.
+
+        After parent init:
+
+        * Allocates ``self.testable`` and ``self.will_die`` arrays.
+        * Loads duration-probability distributions from ``self.durations_file``
+          (JSON).
+        * Loads age/sex death probabilities from ``self.prob_death_file``
+          (CSV).
+        """
         self.init_kwargs["beta_in_family"] = self.init_kwargs["beta"]
         self.init_kwargs["beta_A"] = self.init_kwargs["beta"] * \
             self.init_kwargs["beta_reduction"]
@@ -155,7 +200,17 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def setup_series_and_time_keeping(self):
+        """Extend time-keeping setup with infection-time and contact-history buffers.
 
+        Adds:
+
+        * ``self.infect_time`` – per-node infectious-period counter.
+        * ``self.contact_history`` – 14-day rolling contact buffer.
+        * ``self.successfull_source_of_infection`` – per-node count of
+          successful transmissions originated.
+        * ``self.stat_successfull_layers`` – per-layer daily transmission
+          counts.
+        """
         super().setup_series_and_time_keeping()
 
         self.infect_time = np.zeros(self.num_nodes, dtype=int)
@@ -173,6 +228,20 @@ class SimulationDrivenModel(SimulationEngine):
         }
 
     def states_and_counts_init(self, ext_nodes=None, ext_code=None):
+        """Extend state initialisation with per-node disease-timeline arrays.
+
+        After calling the parent :meth:`states_and_counts_init`:
+
+        * Allocates ``infectious_time``, ``symptomatic_time``,
+          ``rna_time``, and ``time_to_die`` arrays (all initialised to -1).
+        * Resets ``self.testable``.
+        * Sets ``self.need_check`` for S / S_s nodes.
+        * Calls :meth:`update_plan` for all nodes to set initial plans.
+
+        Args:
+            ext_nodes (int, optional): Number of external nodes.
+            ext_code (int, optional): State code for external nodes.
+        """
         super().states_and_counts_init(ext_nodes, ext_code)
 
 
@@ -205,10 +274,19 @@ class SimulationDrivenModel(SimulationEngine):
 
         
     def daily_update(self, nodes):
-        """
-        Everyday checkup
-        """
+        """Perform daily infection checks and update plans for susceptible nodes.
 
+        For susceptible (S / S_s) nodes:
+
+        1. Optionally activates external-node edges (if external nodes present).
+        2. Calls :func:`~models.prob_infection.prob_of_contact` to compute
+           per-node exposure probabilities.
+        3. Sets ``time_to_go=1`` and ``state_to_go=E`` for newly exposed nodes.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes that need a daily
+                check (from ``self.need_check``).
+        """
         # S, S_s
         target_nodes = np.logical_or(
             self._get_target_nodes(nodes, STATES.S),
@@ -249,9 +327,29 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def update_plan(self, nodes):
-        """ This is done for nodes that  just changed their states.
-        New plans are generated according the state."""
+        """Generate new transition plans for nodes that just changed state.
 
+        For each state, samples the appropriate duration(s) from the loaded
+        duration distributions and sets ``self.time_to_go``,
+        ``self.state_to_go``, and ``self.need_check`` accordingly.
+
+        State-specific logic:
+
+        * **S**: no scheduled transition; flagged for daily checks.
+        * **E**: samples incubation duration; branches to I_n or I_a
+          stochastically based on ``asymptomatic_rate``.
+        * **I_n**: samples infectious + RNA-positivity durations; schedules
+          J_n.
+        * **I_a**: samples asymptomatic, infectious, and RNA durations;
+          schedules I_s.
+        * **I_s**: decides death outcome; schedules J_s or D.
+        * **J_s** / **J_n**: schedules R (or D for dying nodes).
+        * **R** / **D**: clears plan.
+
+        Args:
+            nodes (numpy.ndarray): Boolean bitmap of nodes whose plans should
+                be regenerated.
+        """
         # update plan
         # STATES.S:     "S",
         target_nodes = self._get_target_nodes(nodes, STATES.S)
@@ -414,7 +512,16 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def run_iteration(self):
+        """Perform one day of simulation with infection-time tracking.
 
+        Before delegating to the parent :meth:`run_iteration`:
+
+        * Resets per-layer successful-transmission counters for the current
+          day.
+        * Increments ``self.infect_time`` for currently infectious nodes.
+        * When in debug mode, verifies that external-node state constraints
+          are satisfied.
+        """
         if self.num_ext_nodes > 0 and __debug__:
                 # check that ext nodes are still ext nodes
                 assert np.all(
@@ -442,19 +549,43 @@ class SimulationDrivenModel(SimulationEngine):
 
                 
     def move_to_R(self, nodes):
+        """Move a list of nodes to the Recovered state.
+
+        Args:
+            nodes (array-like of int): Node indices to recover.
+        """
         target_nodes = np.zeros(self.num_nodes, dtype=bool)
         target_nodes[nodes] = True
         self.change_states(target_nodes, target_state=STATES.R)
 
     def move_target_nodes_to_R(self, target_nodes):
-        """ same as move_to_R, but nodes given by bitmap target_nodes """
+        """Move nodes (given as a boolean bitmap) to the Recovered state.
+
+        Args:
+            target_nodes (numpy.ndarray): Boolean bitmap of shape
+                ``(num_nodes,)``; nodes where ``True`` are moved to R.
+        """
         self.change_states(target_nodes, target_state=STATES.R)
 
     def move_target_nodes_to_S(self, target_nodes):
-        """ same as move_to_R, but nodes given by bitmap target_nodes """
+        """Move nodes (given as a boolean bitmap) to the Susceptible state.
+
+        Args:
+            target_nodes (numpy.ndarray): Boolean bitmap of shape
+                ``(num_nodes,)``; nodes where ``True`` are moved to S.
+        """
         self.change_states(target_nodes, target_state=STATES.S)
 
     def move_to_E(self, num):
+        """Randomly expose *num* susceptible (S or S_s) nodes by moving them to E.
+
+        Selects nodes uniformly at random from all currently susceptible nodes.
+        If fewer susceptible nodes are available than requested, logs a warning
+        and returns without action.
+
+        Args:
+            num (int): Number of nodes to expose.
+        """
 
         # nodes_supply = [
         #    x
@@ -487,6 +618,12 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def df_source_infection(self):
+        """Return a DataFrame of successful transmissions per contact layer per day.
+
+        Returns:
+            pandas.DataFrame: Indexed by day (0..t-1), with one column per
+            graph layer named after the layer.
+        """
         df = pd.DataFrame(index=range(0, self.t))
         for i in self.graph.layer_ids:
             df[self.graph.layer_name[i]] = self.stat_successfull_layers[i].asarray()[
@@ -495,6 +632,14 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def df_source_nodes(self):
+        """Return a Series of successful infection counts per infectious node.
+
+        Filters to nodes that are not in S, S_s, or E (i.e. nodes that were
+        at some point infectious).
+
+        Returns:
+            pandas.Series: Successful infection counts indexed by node.
+        """
         self.successfull_source_of_infection = self.successfull_source_of_infection[
             np.logical_and(
                 np.logical_and(
@@ -508,8 +653,17 @@ class SimulationDrivenModel(SimulationEngine):
 
 
     def die_or_not_to_die(self, target_nodes):
-        """ decides whether node dies or not
-        accept bitmap of target_nodes
+        """Decide stochastically whether each target node will die from the disease.
+
+        Uses age- and sex-stratified case-fatality rates scaled by ``self.mu``.
+
+        Args:
+            target_nodes (numpy.ndarray): Boolean bitmap of nodes entering
+                the symptomatic state.
+
+        Returns:
+            numpy.ndarray: Boolean array of length ``target_nodes.sum()``;
+            ``True`` where the node is destined to die.
         """
         n_target_nodes = target_nodes.sum()
         if n_target_nodes == 0:
@@ -526,8 +680,21 @@ class SimulationDrivenModel(SimulationEngine):
         return r < probs
 
     def get_time_to_die(self, target_nodes):
-        """ Determine the time after which the node dies. """
+        """Sample the number of days until death for each dying node.
 
+        Uses a mixed piecewise distribution:
+
+        * If U < 0.571: ``X = ceil(10 * U / 0.571)``
+        * Otherwise:  ``X = round(4 - ln(1 - U) / 0.13)``
+
+        Args:
+            target_nodes (numpy.ndarray): Boolean bitmap of nodes that have
+                been determined to die (from :meth:`die_or_not_to_die`).
+
+        Returns:
+            numpy.ndarray: Integer array of length ``target_nodes.sum()``
+            with days-until-death for each dying node.
+        """
         # 1. Vygeneruj U z R(0,1)
         # 2. Pokud U < 0.571, pak X=ceil(U / 0.571)
         # 3. Jinak X= round(4+ln(1-U)/-0.13))
@@ -546,6 +713,16 @@ class SimulationDrivenModel(SimulationEngine):
         return time_X
 
     def get_dead(self):
+        """Return summary statistics about deceased nodes.
+
+        Returns:
+            tuple: ``(total_dead, young, old1, old2)`` where:
+
+            * ``total_dead`` (int) – total count of deceased nodes.
+            * ``young`` (int) – deceased under 65.
+            * ``old1`` (int) – deceased aged 65–79.
+            * ``old2`` (int) – deceased aged 80+.
+        """
         alld = self.state_counts[STATES.D][-1]
         dead_nodes = (self.memberships[STATES.D] == 1).flatten()
         ages = self.graph.nodes_age[dead_nodes]
@@ -555,6 +732,13 @@ class SimulationDrivenModel(SimulationEngine):
         return alld, young, old1, old2
 
     def flip_coin_for_external_edges(self):
+        """Stochastically activate external-node edges for the current day.
+
+        Switches all external-node edges on (resetting from the previous day),
+        then switches off each edge independently with probability
+        ``1 - self.ext_epi``.  This controls the likelihood that external
+        (imported) cases interact with the main population on any given day.
+        """
         ext_nodes = self.nodes[-self.num_ext_nodes:].ravel()
         ext_edges = self.graph.get_nodes_edges(list(ext_nodes))
         self.graph.switch_on_edges(ext_edges)  # recover from the last time

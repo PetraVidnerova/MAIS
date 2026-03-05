@@ -1,3 +1,13 @@
+"""Multi-layer-graph sequential engine (EngineM).
+
+This module defines :class:`EngineM`, which extends
+:class:`~models.engine_sequential.SequentialEngine` to work directly with a
+multi-layer graph object instead of a sparse adjacency matrix.  Edge-level
+transmission probabilities are computed using the graph's own edge-probability
+and edge-intensity queries, taking into account family vs. non-family contact
+layers and asymptomatic infectiousness reduction.
+"""
+
 import pandas as pd
 import numpy as np
 import numpy_indexed as npi
@@ -14,6 +24,29 @@ from utils.sparse_utils import prop_of_row
 
 
 class STATES():
+    """State codes for :class:`EngineM` (mirrors
+    :class:`~models.engine_sequential.STATES`).
+
+    Attributes:
+        S (int): Susceptible.
+        S_s (int): Susceptible with false symptoms.
+        E (int): Exposed.
+        I_n (int): Infectious asymptomatic (non-symptomatic track).
+        I_a (int): Infectious pre-symptomatic.
+        I_s (int): Infectious symptomatic.
+        I_ds (int): Infectious symptomatic, detected.
+        J_s (int): Post-infectious symptomatic.
+        J_n (int): Post-infectious asymptomatic.
+        E_d (int): Exposed, detected.
+        I_da (int): Infectious pre-symptomatic, detected.
+        I_dn (int): Infectious asymptomatic, detected.
+        J_ds (int): Post-infectious symptomatic, detected.
+        J_dn (int): Post-infectious asymptomatic, detected.
+        R_d (int): Recovered, detected.
+        R_u (int): Recovered, undetected.
+        D_d (int): Dead, detected.
+        D_u (int): Dead, undetected.
+    """
     S = 0
     S_s = 1
     E = 2
@@ -37,6 +70,15 @@ class STATES():
 
 
 def _searchsorted2d(a, b):
+    """Vectorised row-wise ``numpy.searchsorted`` (see engine_sequential for details).
+
+    Args:
+        a (numpy.ndarray): 2-D sorted array of shape ``(m, n)``.
+        b (numpy.ndarray): Query values, shape ``(m,)`` or ``(m, 1)``.
+
+    Returns:
+        numpy.ndarray: 1-D insertion-index array of shape ``(m,)``.
+    """
     m, n = a.shape
     max_num = np.maximum(a.max() - a.min(), b.max() - b.min()) + 1
     r = max_num * np.arange(a.shape[0])[:, None]
@@ -45,23 +87,74 @@ def _searchsorted2d(a, b):
 
 
 class EngineM(SequentialEngine):
-    """ be the final one for model-m
-        + operates on multigraph
-        + iterates in days
+    """Multi-layer-graph daily-step engine (the production engine for Model-M).
+
+    Extends :class:`~models.engine_sequential.SequentialEngine` with:
+
+    * Multi-layer graph support via ``self.graph`` (no sparse adjacency
+      matrix).
+    * Detailed per-edge transmission computation in
+      :meth:`prob_of_contact`, accounting for edge type (family / class /
+      pub / super-spreader), edge intensity, and asymptomatic infectiousness
+      reduction.
+
+    This engine is used by the TGM (Task Group Model) model variant.
     """
 
     def update_graph(self, new_G):
-        """ create adjacency matrix for G """
+        """Store the multi-layer graph object and update the node count.
+
+        Unlike the parent implementation, this method does not build a sparse
+        adjacency matrix; the engine queries the graph object directly.
+
+        Args:
+            new_G: A multi-layer graph object exposing ``num_nodes`` and
+                graph-query methods (e.g. ``get_edges``,
+                ``get_edges_probs``).
+        """
         self.G = new_G  # just for backward compability
         self.graph = new_G
         self.num_nodes = self.graph.num_nodes
 #        print(f"DBD: graph udpate {self.graph}")
 
     def node_degrees(self, Amat):
+        """Not implemented: EngineM uses the graph object directly.
+
+        Raises:
+            NotImplementedError: Always.
+        """
         raise NotImplementedError("We use the graph directly, not matrix.")
 
     def prob_of_contact(self, source_states, source_candidate_states, dest_states, dest_candidate_states, beta, beta_in_family):
+        """Compute per-node exposure probability using the multi-layer graph.
 
+        Selects active edges by flipping per-edge coins (edge probability from
+        the graph), then determines which active edges connect nodes in the
+        relevant source/destination states, and finally computes the compound
+        probability that each source node is *not* infected (product over
+        independent contacts) and returns ``1 - P(no infection)``.
+
+        Distinguishes between family-type edges (using *beta_in_family* /
+        ``self.beta_A_in_family``) and other edges (using *beta* /
+        ``self.beta_A``), and reduces transmission rate for asymptomatic
+        infectious nodes.
+
+        Args:
+            source_states (list of int): States that can become exposed.
+            source_candidate_states (list of int): Candidate source states
+                for edge selection (superset of *source_states*).
+            dest_states (list of int): Infectious states.
+            dest_candidate_states (list of int): Candidate destination states
+                for edge selection (superset of *dest_states*).
+            beta (numpy.ndarray): Per-node baseline transmission rate for
+                non-family contacts, shape ``(num_nodes, 1)``.
+            beta_in_family (numpy.ndarray): Per-node baseline transmission
+                rate for family contacts, shape ``(num_nodes, 1)``.
+
+        Returns:
+            numpy.ndarray: Per-node exposure probability, shape
+            ``(num_nodes, 1)``.
+        """
         assert type(dest_states) == list and type(source_states) == list
 
         # 1. select active edges

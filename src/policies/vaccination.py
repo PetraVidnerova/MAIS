@@ -1,3 +1,20 @@
+"""Vaccination policies for the MAIS epidemic simulation.
+
+This module provides several vaccination policy classes that vaccinate
+elderly and worker sub-populations according to a configurable calendar.
+Different subclasses implement distinct mechanisms by which vaccination
+reduces infection risk:
+
+* :class:`Vaccination` – on first exposure (entering state E) a
+  vaccinated node may be redirected back to susceptible.
+* :class:`VaccinationToR` – vaccinated nodes in S are moved directly
+  to R (recovered/immune).
+* :class:`VaccinationToA` – vaccination increases the asymptomatic
+  rate.
+* :class:`VaccinationToSA` – combines the ``ToS`` and ``ToA``
+  mechanisms.
+"""
+
 import time
 import numpy as np
 import pandas as pd
@@ -12,6 +29,19 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 def _process_calendar(filename):
+    """Load a vaccination calendar CSV and return per-group daily counts.
+
+    The CSV must have columns ``T`` (simulation day), ``workers``
+    (number of workers to vaccinate), and ``elderly`` (number of
+    elderly individuals to vaccinate).
+
+    Args:
+        filename (str): Path to the CSV vaccination calendar file.
+
+    Returns:
+        tuple[dict, dict]: A pair ``(workers_calendar, elderly_calendar)``
+        where each is a ``{day: count}`` dictionary.
+    """
     df = pd.read_csv(filename)
     return (
         dict(zip(df["T"], df["workers"].astype(int))),
@@ -21,11 +51,44 @@ def _process_calendar(filename):
 
 class Vaccination(Policy):
 
-    """
-    Vaccination Policy.
+    """Vaccination policy that reduces susceptibility upon exposure.
+
+    When a vaccinated node first enters state ``E`` (exposed), there is
+    a probability (dependent on days since vaccination and whether a
+    first or second dose has been given) that the node is returned to
+    the susceptible state instead of progressing towards illness.
+
+    Vaccination is administered daily according to separate calendars
+    for elderly and worker sub-populations.  The number of days since
+    vaccination is tracked per node.
+
+    Args:
+        graph: The contact network graph object.  Must expose
+            ``num_nodes``, ``nodes_age``, ``nodes_ecactivity``, and
+            ``cat_table``.
+        model: The epidemic model instance.
+        config_file (str): Path to an INI-style configuration file.
+            **Required.**  The file must include:
+
+            * ``[CALENDAR]`` section with ``calendar_filename`` (path
+              to a vaccination calendar CSV) and optionally ``delay``
+              (days between first and second dose).
+            * ``[EFFECT]`` section with ``first_shot`` and
+              ``second_shot`` effectiveness coefficients.
+
+    Raises:
+        str: If ``config_file`` is ``None`` or the calendar filename
+            is missing (raises a string literal – legacy behaviour).
     """
 
     def __init__(self, graph, model, config_file=None):
+        """Initialise the vaccination policy from a configuration file.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            config_file (str): Path to the required configuration file.
+        """
         super().__init__(graph, model)
 
         self.first_day = True
@@ -70,13 +133,33 @@ class Vaccination(Policy):
         # exit()
 
     def first_day_setup(self):
+        """Perform first-day setup (no-op for this policy)."""
         pass
 
     def stop(self):
-        """ just finish necessary, but do nothing new """
+        """Signal the policy to stop vaccinating new nodes.
+
+        After calling ``stop``, nodes already being tracked continue to
+        have their vaccination days incremented, but no new vaccinations
+        are administered.
+        """
         self.stopped = True
 
     def move_to_S(self):
+        """Redirect newly exposed vaccinated nodes back to the susceptible state.
+
+        For each vaccinated node that has just entered state ``E`` for
+        the first time today, a random draw determines whether the
+        vaccine prevents progression.  The probability depends on
+        days-since-vaccination:
+
+        * 14 to (``delay`` + 6) days: ``first_shot_coef``.
+        * (``delay`` + 7) days or more: ``second_shot_coef``.
+
+        Nodes redirected to susceptible have their ``days_in_E`` counter
+        reset.  The count of redirected nodes is recorded in
+        ``stat_moved_to_R``.
+        """
         # take those who are first day E (are E AND are E the first day)
         nodes_first_E = (self.model.memberships[STATES.E] == 1).ravel()
         self.days_in_E[nodes_first_E] += 1
@@ -170,10 +253,21 @@ class Vaccination(Policy):
         self.days_in_E[self.target_for_R] = 0
 
     def process_vaccinated(self):
+        """Apply the vaccination effect to currently vaccinated nodes.
+
+        Calls :meth:`move_to_S` to handle newly exposed vaccinated
+        nodes.  Subclasses override this method to implement alternative
+        vaccination mechanisms.
+        """
         self.move_to_S()
 
     def run(self):
+        """Execute one time-step of the vaccination policy.
 
+        Increments vaccination-day counters, applies the vaccination
+        effect, and administers new vaccinations according to the
+        daily calendar.
+        """
         super().run()
 
         # update vaccinated days
@@ -218,6 +312,14 @@ class Vaccination(Policy):
             self.vaccinate_workers(self.workers_calendar[self.model.T])
 
     def vaccinate_old(self, num):
+        """Vaccinate up to ``num`` elderly nodes (sorted by descending age).
+
+        Nodes that are already vaccinated, currently detected as active
+        cases, or dead are skipped.
+
+        Args:
+            num (int): Maximum number of elderly nodes to vaccinate today.
+        """
         if num == 0:
             return
         logging.info(f"T={self.model.T} Vaccinating {num} elderly.")
@@ -237,6 +339,15 @@ class Vaccination(Policy):
             num -= 1
 
     def vaccinate_workers(self, num):
+        """Vaccinate up to ``num`` worker nodes chosen at random.
+
+        Nodes that are currently detected as active cases or dead are
+        excluded from selection.  If fewer eligible workers than ``num``
+        exist, all eligible workers are vaccinated.
+
+        Args:
+            num (int): Target number of workers to vaccinate today.
+        """
         if num == 0:
             return
         logging.info(f"T={self.model.T} Vaccinating {num} workers.")
@@ -288,6 +399,13 @@ class Vaccination(Policy):
         # #        self.model.move_to_R(to_vaccinate)
 
     def to_df(self):
+        """Return a DataFrame with daily vaccination statistics.
+
+        Returns:
+            pandas.DataFrame: DataFrame indexed by time ``T`` with
+            column ``moved_to_R`` (nodes redirected to susceptible/
+            recovered each day) and ``day``.
+        """
         index = range(0+self.model.start_day-1, self.model.t +
                       self.model.start_day)  # -1 + 1
         policy_name = type(self).__name__
@@ -302,7 +420,25 @@ class Vaccination(Policy):
 
 class VaccinationToR(Vaccination):
 
+    """Vaccination policy that moves susceptible nodes directly to recovered.
+
+    On day 14 after the first shot, susceptible vaccinated nodes are
+    moved to R with probability ``first_shot_coef``.  On day
+    ``delay + 7`` after the first shot, a further fraction
+    ``(second_shot_coef - first_shot_coef)`` is moved to R.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str): Path to the required configuration file.
+    """
+
     def process_vaccinated(self):
+        """Move eligible susceptible vaccinated nodes to recovered state.
+
+        Applies first-shot and second-shot effects by drawing random
+        numbers and calling ``model.move_target_nodes_to_R``.
+        """
         # # update two weeks after first vaccination
         nodes_in_S = self.nodes[self.model.memberships[STATES.S, :, 0] == 1]
 
@@ -325,7 +461,24 @@ class VaccinationToR(Vaccination):
 
 class VaccinationToA(Vaccination):
 
+    """Vaccination policy that increases the asymptomatic rate of vaccinated nodes.
+
+    Fourteen days after the first shot the asymptomatic rate is
+    updated to reflect first-dose effectiveness.  A further update
+    occurs at ``delay + 7`` days to reflect second-dose effectiveness.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str): Path to the required configuration file.
+    """
+
     def update_asymptomatic_rates(self):
+        """Update ``model.asymptomatic_rate`` for nodes at key vaccination milestones.
+
+        First-shot effect is applied at day 14; second-shot effect at
+        day ``self.delay + 7``.
+        """
         # # update two weeks after first vaccination
         selected = self.nodes[self.vaccinated == 14]
         srate = 1 - 0.179
@@ -337,11 +490,26 @@ class VaccinationToA(Vaccination):
             srate*(1-self.second_shot_coef)
 
     def process_vaccinated(self):
+        """Apply vaccination effect by updating asymptomatic rates."""
         self.update_asymptomatic_rates()
 
 
 class VaccinationToSA(VaccinationToA):
 
+    """Vaccination policy combining susceptible redirection and asymptomatic-rate update.
+
+    Applies both the :meth:`Vaccination.move_to_S` mechanism (redirecting
+    newly exposed vaccinated nodes back to susceptible) and the
+    :meth:`VaccinationToA.update_asymptomatic_rates` mechanism each
+    time-step.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str): Path to the required configuration file.
+    """
+
     def process_vaccinated(self):
+        """Apply both susceptible-redirection and asymptomatic-rate-update effects."""
         self.move_to_S()
         self.update_asymptomatic_rates()

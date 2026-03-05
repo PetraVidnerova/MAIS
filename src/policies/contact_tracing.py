@@ -1,3 +1,16 @@
+"""Contact-tracing policy for the MAIS epidemic simulation.
+
+This module extends :class:`~policies.testing_policy.TestingPolicy`
+with contact tracing.  Positively tested nodes are asked for their
+recent contacts; those contacts receive a phone call, are placed into
+quarantine, and undergo an enter test.  Contacts that test positive
+trigger a second round of tracing.
+
+Several pre-configured variants are provided (e.g.
+:class:`CRLikePolicy`, :class:`StrongEvaQuarantinePolicy`, and a
+family of ``W*QuarantinePolicy`` classes with uniform riskiness).
+"""
+
 import numpy as np
 import pandas as pd
 import logging
@@ -21,15 +34,44 @@ from utils.config_utils import ConfigFile
 
 class ContactTracingPolicy(TestingPolicy):
 
-    """
-    Testing + ContactTracing 
+    """Testing policy extended with contact tracing.
 
-    policy responsible for testing and contact tracing
-    - individuals with symptoms go for a test with a certain probability 
-    - those positively tested undergo contact tracing
+    Individuals with symptoms go for a test with a certain probability.
+    Those who test positive undergo contact tracing: their recent
+    contacts are identified, placed in a phone-call waiting queue, then
+    quarantined and given an enter test.  Contacts that test positive
+    trigger a further round of contact tracing.
+
+    Key configurable parameters (set directly or via config file):
+
+    * ``duration`` – isolation length for confirmed cases (default 10).
+    * ``duration_quara`` – quarantine length for contacts (default 14).
+    * ``days_back`` – how many days of contact history to trace
+      (default 7).
+    * ``phone_call_delay`` – days between identification and quarantine
+      notification (default 2).
+    * ``enter_test_delay`` – days after last contact at which the enter
+      test is performed (default 5).
+    * ``riskiness`` – per-layer recall probability array.
+    * ``auto_recover`` – skip exit test; release automatically.
+    * ``enter_test`` – whether to perform an enter test for contacts.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to an INI-style configuration
+            file with sections ``[ISOLATION]``, ``[QUARANTINE]``, and
+            ``[CONTACT_TRACING]``.
     """
 
     def __init__(self, graph, model, config_file=None):
+        """Initialise the contact-tracing policy.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model)
 
         if graph.QUARANTINE_COEFS is not None:
@@ -75,6 +117,15 @@ class ContactTracingPolicy(TestingPolicy):
         self.stat_contacts_collected = TimeSeries(300, dtype=int)
 
     def load_config(self, config_file):
+        """Load policy parameters from a configuration file.
+
+        Reads the ``[ISOLATION]``, ``[QUARANTINE]``, and
+        ``[CONTACT_TRACING]`` sections and updates the corresponding
+        instance attributes.
+
+        Args:
+            config_file (str): Path to the INI-style configuration file.
+        """
         cf = ConfigFile()
         cf.load(config_file)
 
@@ -100,7 +151,13 @@ class ContactTracingPolicy(TestingPolicy):
             "enter_test", "Yes" if self.enter_test else "No") == "Yes"
 
     def first_day_setup(self):
+        """Initialise statistics arrays and call the parent first-day setup.
 
+        Fills ``stat_positive_enter_tests`` and
+        ``stat_contacts_collected`` with zeros for all days before the
+        policy starts, then delegates to
+        :meth:`TestingPolicy.first_day_setup`.
+        """
         # fill the days before start by zeros
         self.stat_positive_enter_tests[0:self.model.t] = 0
         self.stat_contacts_collected[0:self.model.t] = 0
@@ -108,9 +165,20 @@ class ContactTracingPolicy(TestingPolicy):
         super().first_day_setup()
 
     def select_contacts(self, detected_nodes):
-        """
-        Realizes contact tracing of detected nodes,  returns 
-        the set of contacts. 
+        """Trace recent contacts of detected nodes.
+
+        For each detected node the contact history is searched back up
+        to two days before first symptoms, or at most ``self.days_back``
+        days.  Contacts are stochastically filtered by layer riskiness
+        and external/dead nodes are excluded.  The ``last_contact``
+        timestamp for each found contact is updated.
+
+        Args:
+            detected_nodes (numpy.ndarray): Indices of nodes whose
+                contacts should be traced.
+
+        Returns:
+            set: Set of node indices identified as contacts.
         """
         contacts = set()
 
@@ -155,33 +223,73 @@ class ContactTracingPolicy(TestingPolicy):
         return contacts
 
     def filter_out_ext(self, contacts):
+        """Remove external (EXT-state) nodes from a contacts array.
+
+        Args:
+            contacts (numpy.ndarray): Array of node indices to filter.
+
+        Returns:
+            numpy.ndarray: Subset of ``contacts`` not in state ``EXT``.
+        """
         is_not_ext = self.model.memberships[STATES.EXT, contacts, 0] == 0
         return contacts[is_not_ext]
 
     def filter(self, contacts, types):
-        """
-        Randomly filters contacts. Returns those that are `recalled`. 
-        Probability of recall is given by a riskiness of the type of the contact. 
+        """Stochastically filter contacts by layer riskiness.
+
+        Each contact is retained with probability equal to the
+        riskiness of its contact-layer type (``self.riskiness[type]``).
+
+        Args:
+            contacts (numpy.ndarray): Array of node indices.
+            types (numpy.ndarray): Integer array of layer types
+                corresponding to each contact in ``contacts``.
+
+        Returns:
+            numpy.ndarray: Subset of ``contacts`` that are recalled.
         """
         risk = self.riskiness[types]
         r = np.random.rand(len(risk))
         return contacts[r < risk]
 
     def stop(self):
-        """ just finish necessary, but do not qurantine new nodes """
+        """Signal the policy to stop quarantining new nodes.
+
+        After calling ``stop``, existing quarantines are still managed
+        but no new nodes are placed into isolation or quarantine.
+        """
         self.stopped = True
 
     def select_test_candidates(self):
-        """ 
-        Selects nodes that are going to be tested, exclude those alredy in isolation/quarantine.
+        """Select test candidates, excluding nodes already in isolation/quarantine.
+
+        Delegates to the parent :meth:`TestingPolicy.select_test_candidates`
+        and then filters out any node already held in the deposit.
+
+        Returns:
+            numpy.ndarray: Array of node indices to be tested today.
         """
         test_candidates = super().select_test_candidates()
         # exclude those that are already in quarantine
         return self.depo.filter_locked(test_candidates)
 
     def process_detected_nodes(self, target_nodes):
-        """
-        Put detected nodes to quarantine, finish quaratines, do contact tracing.
+        """Isolate detected nodes, release finished quarantines, and run contact tracing.
+
+        Workflow each time-step:
+
+        1. Advance the deposit and process leaving nodes.
+        2. Isolate ``target_nodes``.
+        3. Trace contacts of ``target_nodes``; notify contacts via
+           phone-call queue.
+        4. Run enter-test procedure for contacts whose phone-call
+           delay has elapsed.
+        5. Trace contacts of enter-test positives and add them to the
+           notification queue.
+
+        Args:
+            target_nodes (numpy.ndarray): Indices of nodes newly
+                detected (positive test result) today.
         """
 
         released = self.tick()
@@ -243,11 +351,19 @@ class ContactTracingPolicy(TestingPolicy):
                         all_contacts)
 
     def enter_test_procedure(self, contacts):
-        """
-        Process enter tests. 
-        `contacts` will be registred for test and wait for it, those
-        who waited enough are tested.
-        Returns nodes detected during the enter test (as np.array).
+        """Register contacts for an enter test and process those ready to be tested.
+
+        ``contacts`` are added to the enter-test waiting room.  Nodes
+        that have waited long enough are tested; positive results are
+        counted and returned.
+
+        Args:
+            contacts (numpy.ndarray): Indices of newly quarantined
+                contacts to register for an enter test.
+
+        Returns:
+            numpy.ndarray: Indices of contacts who tested positive
+            during today's enter tests.
         """
         if not self.enter_test:
             return np.array([])
@@ -281,10 +397,21 @@ class ContactTracingPolicy(TestingPolicy):
         return ill
 
     def leaving_procedure(self, nodes):
-        """
-        Process nodes that should be released from isolation/quarantine.
-        If not auto recover enabled, nodes are tested and those tested possitively 
-        are sent to quarantine/isolation for another two days.
+        """Process nodes whose isolation/quarantine period has elapsed.
+
+        If ``auto_recover`` is ``False``, nodes are tested:
+
+        * Those still ill remain for two more days.
+        * Those with a negative enter test are released immediately.
+        * Those without a prior negative enter test wait two more days
+          for a confirmatory second test.
+
+        If ``auto_recover`` is ``True``, all nodes are released
+        immediately without testing.
+
+        Args:
+            nodes (numpy.ndarray): Indices of nodes released from the
+                deposit today (i.e. their timer reached zero).
         """
 
         if not self.auto_recover:
@@ -345,11 +472,24 @@ class ContactTracingPolicy(TestingPolicy):
             self.node_active_case[dead] = False
 
     def run(self):
+        """Execute one time-step of the contact-tracing policy.
+
+        Resets daily statistics counters and then delegates to the
+        parent :meth:`TestingPolicy.run`.
+        """
         self.stat_positive_enter_tests[self.model.t] = 0
         self.stat_contacts_collected[self.model.t] = 0
         super().run()
 
     def to_df(self):
+        """Return a DataFrame with testing and contact-tracing statistics.
+
+        Extends the parent :meth:`TestingPolicy.to_df` result with
+        columns ``positive_enter_test`` and ``contacts_collected``.
+
+        Returns:
+            pandas.DataFrame: DataFrame indexed by time ``T``.
+        """
         df = super().to_df()
 
         df["positive_enter_test"] = self.stat_positive_enter_tests[:self.model.t+1]
@@ -362,7 +502,28 @@ class ContactTracingPolicy(TestingPolicy):
 
 class CRLikePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy that mimics the Czech Republic (CR) approach.
+
+    Applies a time-varying riskiness schedule that adjusts contact-recall
+    probabilities at several hard-coded simulation days to reflect
+    changing intervention intensity.  If a config file is provided it
+    overrides the built-in schedule.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to a configuration file that
+            overrides the built-in riskiness schedule.
+    """
+
     def __init__(self, graph, model, config_file=None):
+        """Initialise the CR-like policy with a time-varying riskiness schedule.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model, config_file=None)  # run it without loading config
         self.riskiness = get_riskiness(graph, 1, 0.1, 0.01)
         self.enter_test = True
@@ -379,7 +540,15 @@ class CRLikePolicy(ContactTracingPolicy):
             self.load_config(config_file)
 
     def reconfig(self, day):
+        """Apply riskiness configuration for a specific simulation day.
 
+        Called both during ``__init__`` (to replay past reconfiguration
+        events when the simulation starts mid-run) and during ``run``
+        (once per day).
+
+        Args:
+            day (int): Simulation day number at which to apply changes.
+        """
         if day == 66:
             self.riskiness = get_riskiness(self.graph, 1.0, 0.8, 0.4)
             self.enter_test = True
@@ -406,6 +575,11 @@ class CRLikePolicy(ContactTracingPolicy):
         #     self.auto_recover = True
 
     def run(self):
+        """Execute one time-step, applying any scheduled reconfiguration first.
+
+        Calls :meth:`reconfig` for the current simulation day and then
+        delegates to the parent :meth:`ContactTracingPolicy.run`.
+        """
         # if self.model.T == 218:
         #     self.riskiness = get_riskiness(0.8, 0.4, 0.2)
         self.reconfig(self.model.T)
@@ -415,12 +589,30 @@ class CRLikePolicy(ContactTracingPolicy):
 # do not use these classes (abandoned), use config file
 class StrongEvaQuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with maximum riskiness for all layers.
+
+    Abandoned variant; prefer using a config file instead.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = RISK_FOR_LAYERS_MAX
 
 
 class NoEvaQuarantinePolicy(ContactTracingPolicy):
+
+    """Contact-tracing policy with zero riskiness (no contacts traced).
+
+    Abandoned variant; prefer using a config file instead.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -429,12 +621,28 @@ class NoEvaQuarantinePolicy(ContactTracingPolicy):
 
 class MiniEvaQuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with minimal riskiness (family contacts only).
+
+    Abandoned variant; prefer using a config file instead.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = RISK_FOR_LAYERS_MINI
 
 
 class Exp2AQuarantinePolicy(ContactTracingPolicy):
+
+    """Experimental variant A: full riskiness for family, school/work, and leisure.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -443,12 +651,26 @@ class Exp2AQuarantinePolicy(ContactTracingPolicy):
 
 class Exp2BQuarantinePolicy(ContactTracingPolicy):
 
+    """Experimental variant B: full riskiness for family and school/work only.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(self.graph, 1.0, 1.0, 0.0, 0.0)
 
 
 class Exp2CQuarantinePolicy(ContactTracingPolicy):
+
+    """Experimental variant C: full riskiness for family contacts only.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -457,12 +679,26 @@ class Exp2CQuarantinePolicy(ContactTracingPolicy):
 
 class W10QuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with uniform 10 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(self.graph, 0.1, 0.1, 0.1)
 
 
 class W20QuarantinePolicy(ContactTracingPolicy):
+
+    """Contact-tracing policy with uniform 20 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -471,12 +707,26 @@ class W20QuarantinePolicy(ContactTracingPolicy):
 
 class W30QuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with uniform 30 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(self.graph, 0.3, 0.3, 0.3)
 
 
 class W40QuarantinePolicy(ContactTracingPolicy):
+
+    """Contact-tracing policy with uniform 40 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
 
     def __init__(self, graph, model):
         super().__init__(graph, model)
@@ -485,6 +735,13 @@ class W40QuarantinePolicy(ContactTracingPolicy):
 
 class W60QuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with uniform 60 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(self.graph, 0.6, 0.6, 0.6)
@@ -492,11 +749,29 @@ class W60QuarantinePolicy(ContactTracingPolicy):
 
 class W80QuarantinePolicy(ContactTracingPolicy):
 
+    """Contact-tracing policy with uniform 80 % riskiness across all groups.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+    """
+
     def __init__(self, graph, model):
         super().__init__(graph, model)
         self.riskiness = get_riskiness(self.graph, 0.8, 0.8, 0.8)
 
 
 def _riskiness(contact, graph, riskiness):
+    """Return the riskiness value for a given contact edge.
+
+    Args:
+        contact: Edge identifier (used to look up the layer).
+        graph: The contact network graph object with a
+            ``get_layer_for_edge`` method.
+        riskiness (numpy.ndarray): Per-layer riskiness array.
+
+    Returns:
+        float: Riskiness value for the layer of the given contact edge.
+    """
     #    print(f"DBG riskiness {graph.e_types[contact]}:{riskiness[graph.get_layer_for_edge(contact)]}")
     return riskiness[graph.get_layer_for_edge(contact)]

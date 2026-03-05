@@ -1,6 +1,20 @@
 # auxiliary graph for testing
 # not supported at the moment
 
+"""Romeo and Juliet test graph for small-scale simulation experiments.
+
+This module defines :class:`RomeoAndJuliet`, a handcrafted multi-layer
+contact graph based on the characters and social relationships in
+Shakespeare's *Romeo and Juliet*.  It is intended purely as a small,
+interpretable test fixture for validating model mechanics and is not used in
+production simulations.
+
+The graph uses 15 layer types (indices 0–14) matching the ``GraphGenerator``
+convention, where meaningful layers are ``family`` (1), ``friends`` (10),
+``work`` (11), ``work to clients`` (12), ``public transport`` (13) and
+``shops and events`` (14).
+"""
+
 # from graphviz import Graph
 from graph_gen import GraphGenerator
 import networkx as nx
@@ -9,6 +23,34 @@ import pandas as pd
 
 
 class RomeoAndJuliet(GraphGenerator):
+    """Handcrafted multi-layer contact graph of the Romeo and Juliet cast.
+
+    Encodes the social network of all named characters (35 nodes) across
+    five meaningful contact layers:
+
+    * Layer 1  – family
+    * Layer 10 – friends
+    * Layer 11 – work
+    * Layer 12 – work to clients
+    * Layer 13 – public transport
+    * Layer 14 – shops and events (Capulet party subgraph)
+
+    Edge weights are assigned randomly from a truncated-normal distribution
+    ``TruncNorm(mu=0.7, sigma=0.3, lower=0, upper=1)`` for each edge.
+
+    This class is intended as a small, interpretable test fixture and is not
+    used in production simulations.
+
+    Class Attributes:
+        layer_probs (list[int]): Transmission probability per layer,
+            all initialised to ``1``.
+        layer_names (list[str]): Human-readable name for each of the 15
+            layer indices.
+
+    Args:
+        **kwargs: Keyword arguments forwarded to :class:`GraphGenerator`.
+    """
+
     layer_probs = [1] * 15
     layer_names = ['not in Verona', 'family', 'not in Verona', 'not in Verona',
                    'not in Verona', 'not in Verona', 'not in Verona', 'not in Verona',
@@ -392,6 +434,20 @@ class RomeoAndJuliet(GraphGenerator):
                 (lower - mu) / sigma, (upper - mu) / sigma, loc=mu, scale=sigma)
 
     def write_to_csv(self, prefix='raj'):
+        """Export the graph to three CSV files (edges, nodes, layer types).
+
+        The three output files are named:
+
+        * ``<prefix>-edges.csv``  – columns: ``vertex1``, ``vertex2``,
+          ``type``, ``weight``
+        * ``<prefix>-nodes.csv``  – columns: ``type``, ``label``, ``sex``,
+          ``age``
+        * ``<prefix>-etypes.csv`` – columns: ``id``, ``name``, ``weight``
+
+        Args:
+            prefix (str): Common filename prefix for the output files.
+                Defaults to ``'raj'``.
+        """
         df = nx.to_pandas_edgelist(self.G)
         df.columns = ['vertex1', 'vertex2', 'type', 'weight']
         df.to_csv(prefix+'-edges.csv', index=False)

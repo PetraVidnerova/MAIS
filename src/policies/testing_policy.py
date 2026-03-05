@@ -1,3 +1,11 @@
+"""Testing policy for the MAIS epidemic simulation.
+
+This module defines :class:`TestingPolicy`, which implements
+symptom-driven PCR testing, isolation of detected cases, and the
+release procedure after isolation ends.  It tracks daily test counts,
+positive/negative results, and active-case statistics.
+"""
+
 import time
 import numpy as np
 import pandas as pd
@@ -17,11 +25,41 @@ from utils.config_utils import ConfigFile
 
 class TestingPolicy(Policy):
 
-    """
-    TestingPolicy takes care of testing.
+    """Policy for symptom-driven testing and case isolation.
+
+    Individuals with symptoms seek testing with a configurable probability
+    (``theta_Is``).  Positively tested nodes are placed into isolation
+    for ``duration`` days.  Nodes are retested at the end of isolation;
+    those still ill remain for an additional two days unless
+    ``auto_recover`` is enabled.
+
+    Statistics collected per time-step:
+
+    * ``all_tests``       – total tests performed.
+    * ``positive_tests``  – tests with a positive result.
+    * ``negative_tests``  – tests with a negative result.
+    * ``I_d``             – active (detected) cases.
+    * ``cum_I_d``         – cumulative detected cases.
+
+    Args:
+        graph: The contact network graph object.
+        model: The epidemic model instance.
+        config_file (str, optional): Path to an INI-style configuration
+            file.  The ``[ISOLATION]`` section may contain:
+
+            * ``duration`` (int) – isolation length in days (default 10).
+            * ``auto_recover`` (str) – ``"Yes"`` to skip the exit test
+              and release nodes automatically (default ``"No"``).
     """
 
     def __init__(self, graph, model, config_file=None):
+        """Initialise the testing policy.
+
+        Args:
+            graph: The contact network graph object.
+            model: The epidemic model instance.
+            config_file (str, optional): Path to a configuration file.
+        """
         super().__init__(graph, model)
 
         self.nodes = np.arange(model.num_nodes)
@@ -62,6 +100,12 @@ class TestingPolicy(Policy):
             ) == "Yes"
 
     def init_deposit(self):
+        """Initialise the isolation deposit and quarantine coefficients.
+
+        Creates a :class:`~policies.depo.Depo` sized to the graph and
+        assigns quarantine coefficients from the graph if available,
+        otherwise falls back to the module-level defaults.
+        """
         # depo of quarantined nodes
         self.depo = Depo(self.graph.number_of_nodes)
         if self.graph.QUARANTINE_COEFS is None:
@@ -70,7 +114,20 @@ class TestingPolicy(Policy):
             self.coefs = self.graph.QUARANTINE_COEFS
 
     def quarantine_nodes(self, detected_nodes, last_contacts=False, duration=None):
-        """ insert nodes into the depo and make modifications in a graph """
+        """Place detected nodes into isolation and modify graph layers.
+
+        Newly detected nodes (those not already isolated) have their
+        contact layers suppressed via the quarantine coefficients.
+        All provided nodes are then locked into the deposit.
+
+        Args:
+            detected_nodes (numpy.ndarray): Indices of nodes to isolate.
+            last_contacts (bool): If ``True``, the isolation duration is
+                shortened to account for time already elapsed since the
+                node's last known contact.  Defaults to ``False``.
+            duration (int, optional): Override the default isolation
+                duration.  Uses ``self.duration`` when ``None``.
+        """
         if len(detected_nodes) > 0:
             assert self.coefs is not None
 
@@ -93,12 +150,20 @@ class TestingPolicy(Policy):
                         f"is beeing locked for {sentences if isinstance(sentences, int) else sentences[np.where(detected_nodes == cfgs.MONITOR_NODE)[0][0]]} days")
 
     def tick(self):
-        """ update time and return released """
+        """Advance the isolation deposit by one day and return released nodes.
+
+        Returns:
+            numpy.ndarray: Indices of nodes released from isolation today.
+        """
         released = self.depo.tick_and_get_released()
         return released
 
     def release_nodes(self, released):
-        """ update graph for nodes that are released """
+        """Restore graph edges for nodes leaving isolation.
+
+        Args:
+            released (numpy.ndarray): Indices of nodes to release.
+        """
         if len(released) > 0:
             logging.debug(f"DBG {type(self).__name__} Released nodes: {len(released)}")
             self.graph.recover_edges_for_nodes(released)
@@ -108,7 +173,14 @@ class TestingPolicy(Policy):
                         f"is released from quarantine/isolation.")
 
     def to_df(self):
-        """ create dataframe with statistics """
+        """Create a DataFrame containing daily testing statistics.
+
+        Returns:
+            pandas.DataFrame: DataFrame indexed by time ``T`` with
+            columns ``all_tests``, ``positive_tests``,
+            ``negative_tests``, ``I_d`` (active cases), ``cum_I_d``
+            (cumulative detected cases), and ``day``.
+        """
         index = range(0+self.model.start_day-1, self.model.t +
                       self.model.start_day)  # -1 + 1
         policy_name = type(self).__name__
@@ -125,14 +197,26 @@ class TestingPolicy(Policy):
         return df
 
     def stop(self):
+        """Signal the policy to stop quarantining new nodes.
+
+        After calling ``stop``, the policy will continue to manage
+        nodes already in isolation but will not place any new nodes
+        into isolation.
+        """
         # just finish necessary, but do not qurantine new nodes
         self.stopped = True
 
     def process_detected_nodes(self, target_nodes):
-        """"
-        Put detected nodes into isolation. 
+        """Put detected nodes into isolation and handle releases.
 
-        target nodes ... list of nodes detected today
+        Advances the deposit by one tick, filters out nodes that died
+        during isolation, places ``target_nodes`` into isolation, and
+        performs exit testing (or auto-recovers) for nodes whose
+        isolation period has ended.
+
+        Args:
+            target_nodes (numpy.ndarray): Indices of nodes detected
+                (positive test result) today.
         """
         released = self.tick()
         # dead are those who died during qurantine/isolation
@@ -162,6 +246,10 @@ class TestingPolicy(Policy):
             self.node_active_case[dead] = False
 
     def first_day_setup(self):
+        """Fill statistics arrays with zeros for all days before the policy starts.
+
+        Called automatically on the first invocation of ``run``.
+        """
         # fill the days before start by zeros
         self.stat_all_tests[0:self.model.t] = 0
         self.stat_positive_tests[0:self.model.t] = 0
@@ -172,6 +260,11 @@ class TestingPolicy(Policy):
         self.first_day = False
 
     def update_first_symptoms(self):
+        """Record the current time-step as the first day of symptoms for newly symptomatic nodes.
+
+        Nodes that are symptomatic (state ``I_s``) for the first time
+        today have ``self.first_symptoms`` set to the current time ``t``.
+        """
         # nodes with symptoms
         is_nodes = (self.model.memberships[STATES.I_s] == 1).ravel()
         # day of first symptoms of nodes with symptoms
@@ -181,13 +274,28 @@ class TestingPolicy(Policy):
         self.first_symptoms[is_nodes] = self.model.t
 
     def filter_dead(self, nodes):
+        """Split a node array into alive and dead subsets.
+
+        Args:
+            nodes (numpy.ndarray): Indices of nodes to filter.
+
+        Returns:
+            tuple[numpy.ndarray, numpy.ndarray]: A pair ``(alive, dead)``
+            where ``alive`` contains nodes not in state ``D`` and
+            ``dead`` contains nodes in state ``D``.
+        """
         is_not_dead = self.model.current_state[nodes, 0] != STATES.D
         return nodes[is_not_dead], nodes[np.logical_not(is_not_dead)]
 
     def select_test_candidates(self):
-        """
-        Flips coin for testable nodes and returns those who should be tested today. 
-        returns np.array of nodes numbers
+        """Select nodes to be tested today by probabilistic coin-flip.
+
+        Testable nodes (``self.model.testable == True``) are candidates.
+        Each candidate is independently tested with probability
+        ``self.model.theta_Is[node]``.  Dead nodes are excluded.
+
+        Returns:
+            numpy.ndarray: Array of node indices selected for testing today.
         """
 
         target_nodes = self.nodes[self.model.testable]
@@ -213,13 +321,28 @@ class TestingPolicy(Policy):
         return nodes_to_be_tested
 
     def perform_test(self, nodes):
-        """ Take nodes and creates two groups of them - healthy and ill.
-            Healthy are those in states S, Ss, R, E (not detectable).
-            Ill are those in states Is, In, Ia, Js, Jn.
-            Nodes in states EXT and D are not allowed to take a test. 
+        """Administer tests to the given nodes and classify results.
 
-            returns healthy, ill 
-            (both int np.arrays) 
+        Nodes in states S, S_s, R, and E are considered healthy
+        (negative test result).  Nodes in states I_s, I_n, I_a, J_s,
+        and J_n are considered ill (positive result).  Nodes in states
+        EXT or D must not be passed to this method.
+
+        Updates ``stat_all_tests``, ``stat_positive_tests``,
+        ``stat_negative_tests``, ``node_detected``, and
+        ``node_active_case`` on the model.
+
+        Args:
+            nodes (numpy.ndarray): Indices of nodes to test.
+
+        Returns:
+            tuple[numpy.ndarray, numpy.ndarray]: A pair
+            ``(healthy, ill)`` of integer node-index arrays.
+
+        Raises:
+            ValueError: If any node in ``nodes`` is in state ``EXT``.
+            AssertionError: If ``healthy`` and ``ill`` sizes do not sum
+                to ``len(nodes)``.
         """
 
         n = len(nodes)
@@ -277,7 +400,12 @@ class TestingPolicy(Policy):
         return healthy, ill
 
     def run(self):
+        """Execute one time-step of the testing policy.
 
+        Selects test candidates, performs tests, isolates positively
+        tested nodes, and updates active-case statistics.  Delegates
+        first-day setup to the parent class.
+        """
         s = time.time()
         super().run()
 

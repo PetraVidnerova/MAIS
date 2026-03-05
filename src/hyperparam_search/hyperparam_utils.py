@@ -1,3 +1,15 @@
+"""High-level utilities for running hyperparameter searches on epidemic models.
+
+This module acts as the entry-point for hyperparameter optimisation workflows.
+It loads model and search configurations from disk, wires together the model
+runner with the chosen search method (grid search, CMA-ES, …), and exposes
+``run_hyperparam_search`` as the primary public API.
+
+Internal helpers handle model duplication, parameter pre-processing (e.g.
+``theta`` expansion, ``beta_A`` derivation from ``a_reduction``), and
+selection of a return/loss function from ``eval_model.return_func_zoo``.
+"""
+
 import json
 from functools import partial
 
@@ -18,32 +30,42 @@ def run_hyperparam_search(model_config: str,
                           return_func: str = None,
                           return_func_kwargs: Dict = None,
                           **kwargs):
-    """
-    Run hyperparameter search on a model loaded from config. Hyperparameters specified in `hyperparam_config`
-    overwrite those in `model_config`. Search method is defined in `hyperparam_config` as well.
+    """Run hyperparameter search on a model loaded from config.
 
-    A single model run returns the model as a whole. If only a part of info is to be extracted, pass
-    `return_func` to this function - a string that corresponds to a specific function in `utils.eval_model`.
+    Hyperparameters specified in ``hyperparam_config`` overwrite those in
+    ``model_config``.  The search method is also defined in
+    ``hyperparam_config``.
 
-    Params:
-        model_config: Model config filename (ini)
-        hyperparam_config: Hyperparam search filename (json)
-        model_random_seed: Initial random seed for every model.
+    A single model run returns the model as a whole.  If only a subset of
+    information is to be extracted, pass ``return_func`` – a string key that
+    selects a specific metric function from ``eval_model.return_func_zoo``.
 
-        run_n_times: For a single model (with specific hyperparams), repeat run multiple times. Random seed
-            for i-th run is set to `model_random_seed` + i.
+    Args:
+        model_config (str): Path to the model configuration file (INI format).
+        hyperparam_config (str): Path to the hyperparameter search
+            configuration file (JSON format).
+        model_random_seed (int): Initial random seed for every model.
+            Defaults to ``42``.
+        run_n_times (int): For a single model (with specific hyperparams),
+            repeat the run multiple times.  The random seed for the i-th run
+            is set to ``model_random_seed + i``.  Defaults to ``1``.
+        start_day (int or None): Starting day for the experiment.  If
+            ``None``, ``start_day`` from the model config is used.
+        n_days (int or None): Number of days to run the experiment.  If
+            ``None``, ``duration`` from the model config (or ``60`` if not
+            set) is used.
+        return_func (str or None): String key of the return/loss function
+            from ``eval_model.return_func_zoo``.  ``None`` returns the model
+            object itself.
+        return_func_kwargs (Dict or None): Additional keyword arguments
+            forwarded to the return function selected by ``return_func``.
+        **kwargs: Additional keyword arguments forwarded to the hyperparameter
+            search function (interpretation is method-specific).
 
-        start_day: Starting day for the experiment - if None, use `start_day` from the model config.
-
-        n_days: Number of days to run the experiment. If None, use `duration` from the model confing or 60 if
-            not set.
-
-        return_func: String key of return function from `utils.eval_model`
-        return_func_kwargs: Additional kwargs to pass to return function (which is specified by `return_func`).
-        **kwargs: Additional keyword arguments to pass to the hyperparam search function,
-            possibly specific to the given method).
-
-    Returns: Result of hyperparameter optimization (specific to search method).
+    Returns:
+        Result of hyperparameter optimisation, specific to the chosen search
+        method (e.g. a list of dicts for grid search, or a single best-params
+        dict for CMA-ES).
     """
 
     cf = ConfigFile()
@@ -71,6 +93,20 @@ def run_hyperparam_search(model_config: str,
 
 
 def run_single_model(model, T, print_interval=10, verbose=False):
+    """Run a single model for ``T`` days and return it.
+
+    Args:
+        model: A ``ModelM`` instance that is ready to be run (or will be set
+            up automatically on the first call to ``model.run``).
+        T (int): Number of simulation days.
+        print_interval (int): How often (in days) to print a progress summary.
+            Defaults to ``10``.
+        verbose (bool): Whether to print detailed per-step output.
+            Defaults to ``False``.
+
+    Returns:
+        ModelM: The same ``model`` object after simulation has completed.
+    """
     model.run(T=T, verbose=verbose, print_interval=print_interval)
     return model
 
@@ -84,6 +120,48 @@ def _run_models_from_config(cf: ConfigFile,
                             n_days: int = None,
                             return_func: str = None,
                             return_func_kwargs: Dict = None):
+    """Run the model (possibly multiple times) with a specific set of hyperparameters.
+
+    This is the inner callable that is partially applied by
+    ``run_hyperparam_search`` and then passed to the search method.  It
+    handles a handful of model-specific parameter transformations before
+    constructing or duplicating the model:
+
+    * ``theta`` is expanded into ``theta_E``, ``theta_Ia``, and ``theta_In``.
+    * ``a_reduction`` is converted to ``beta_A = beta * a_reduction``.
+    * ``beta`` / ``beta_A`` are mirrored into their ``*_in_family`` variants.
+    * Keys starting with ``policy_`` are stripped of their prefix and forwarded
+      to the policy constructor.
+
+    Args:
+        cf (ConfigFile): Loaded configuration object for the model.
+        preloaded_graph: Pre-built graph object to avoid reloading from disk.
+            Pass ``None`` to load from config.
+        preloaded_model: A ``ModelM`` instance to duplicate instead of
+            constructing a new model from scratch.  Pass ``None`` to build
+            from config.
+        hyperparams (Dict): Dictionary of hyperparameter names to values for
+            this particular evaluation.  Defaults to ``None``.
+        model_random_seed (int): Base random seed.  Defaults to ``42``.
+        run_n_times (int): Number of independent repetitions (each with seed
+            ``model_random_seed + i``).  Defaults to ``1``.
+        n_days (int): Override for the simulation duration.  If ``None``,
+            the value from config (or ``60``) is used.
+        return_func (str): Key into ``return_func_zoo`` selecting the metric
+            to compute.  ``None`` returns the model object itself.
+        return_func_kwargs (Dict): Extra keyword arguments forwarded to the
+            selected return function.
+
+    Returns:
+        dict: A dictionary with the following keys:
+
+            * ``"result"`` – scalar metric (or list of metrics when
+              ``run_n_times > 1``), or the model object when
+              ``return_func`` is ``None``.
+            * ``"hyperparams"`` – the (potentially transformed) hyperparameter
+              dictionary used for this run.
+            * ``"seed"`` – the base random seed that was used.
+    """
     # copy model
     ndays = n_days if n_days is not None else cf.section_as_dict("TASK").get("duration", 60)
     print_interval = cf.section_as_dict("TASK").get("print_interval", 1)
@@ -140,6 +218,22 @@ def _run_models_from_config(cf: ConfigFile,
 
 
 def _init_hyperparam_search(hyperparam_file: str):
+    """Load a hyperparameter search configuration and return the search callable.
+
+    Reads a JSON file whose ``"method"`` key selects the search strategy from
+    ``hyperparam_search_zoo``.  The full config dict is partially applied as
+    the ``hyperparam_config`` argument of the chosen strategy function.
+
+    Args:
+        hyperparam_file (str): Path to the JSON configuration file describing
+            the hyperparameter search (method, parameter ranges, CMA settings,
+            etc.).
+
+    Returns:
+        functools.partial: A callable ``(model_func, **kwargs) -> result`` that
+        executes the selected search strategy with the loaded configuration
+        already bound.
+    """
     with open(hyperparam_file, 'r') as json_file:
         config = json.load(json_file)
 

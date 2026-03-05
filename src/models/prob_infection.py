@@ -1,3 +1,17 @@
+"""Network contact and infection probability utilities.
+
+This module provides standalone functions that compute which edges become
+"active" on a given day and whether susceptible nodes are exposed via those
+active edges.  Two main entry points are provided:
+
+* :func:`prob_of_contact` – the current production implementation.
+* :func:`prob_of_contact_old` – a legacy implementation retained for
+  reference.
+
+Helper functions :func:`select_active_edges`, :func:`archive_active_edges`,
+and :func:`get_relevant_edges` are used internally by both entry points.
+"""
+
 import time
 import numpy as np
 import numpy_indexed as npi
@@ -8,6 +22,28 @@ from models.states import STATES
 
 
 def select_active_edges(model, source_states, source_candidate_states, dest_states, dest_candidate_states):
+    """Stochastically select active (contact) edges between two node sets.
+
+    For each edge connecting a node in *source_candidate_states* to a node in
+    *dest_candidate_states*, flips a biased coin with the edge's daily-contact
+    probability.  Returns only edges where contact actually occurred.
+
+    Args:
+        model: The active simulation model instance (must expose
+            ``memberships``, ``graph``, ``num_nodes``).
+        source_states (list of int): States whose nodes can become exposed
+            (used for final filtering, not edge selection).
+        source_candidate_states (list of int): Superset of *source_states*
+            used for initial candidate-edge selection.
+        dest_states (list of int): Infectious states (used for filtering).
+        dest_candidate_states (list of int): Superset of *dest_states* used
+            for initial candidate-edge selection.
+
+    Returns:
+        tuple: ``(active_edges, active_edges_dirs)`` where both are
+        ``numpy.ndarray`` of shape ``(num_active_edges,)``, or
+        ``(None, None)`` if no edges are active.
+    """
     assert type(dest_states) == list and type(source_states) == list
 
     # 1. select active edges
@@ -65,6 +101,17 @@ def select_active_edges(model, source_states, source_candidate_states, dest_stat
 
 
 def archive_active_edges(model, active_edges, active_edges_dirs):
+    """Record today's active edges in the model's contact-history buffer.
+
+    Retrieves source and destination node indices for each active edge and
+    appends them (along with edge type) to ``model.contact_history``.
+
+    Args:
+        model: The active simulation model instance.
+        active_edges (numpy.ndarray): Indices of today's active edges.
+        active_edges_dirs (numpy.ndarray): Direction flags for each edge
+            (``True`` = canonical direction, ``False`` = reversed).
+    """
     s = time.time()
     # get source and dest nodes for active edges
     # source and dest met today, dest is possibly infectious, source was possibly infected
@@ -94,6 +141,23 @@ def archive_active_edges(model, active_edges, active_edges_dirs):
 
 
 def get_relevant_edges(model, active_edges, active_edges_dirs, source_states, dest_states):
+    """Filter active edges to those connecting relevant source/destination states.
+
+    From the set of *active_edges* retains only those where the source node is
+    in one of *source_states* and the destination node is in one of
+    *dest_states*.
+
+    Args:
+        model: The active simulation model instance.
+        active_edges (numpy.ndarray): Indices of today's active edges.
+        active_edges_dirs (numpy.ndarray): Direction flags for *active_edges*.
+        source_states (list of int): States eligible to be exposed.
+        dest_states (list of int): Infectious states.
+
+    Returns:
+        tuple: ``(active_relevant_edges, active_relevant_edges_dirs)`` or
+        ``(None, None)`` if no relevant edges remain after filtering.
+    """
     # restrict the selection to only relevant states
     # (ie. candidates can be both E and I, relevant are only I)
     # candidates are those who will be possibly relevant in future
@@ -140,8 +204,26 @@ def get_relevant_edges(model, active_edges, active_edges_dirs, source_states, de
 
 
 def prob_of_contact_old(model, source_states, source_candidate_states, dest_states, dest_candidate_states, beta, beta_in_family):
-    """ 
-    abandoned method 
+    """Legacy implementation of the contact-probability computation (abandoned).
+
+    Retained for historical reference only.  Prefer :func:`prob_of_contact`.
+
+    Args:
+        model: The active simulation model instance.
+        source_states (list of int): States that can be exposed.
+        source_candidate_states (list of int): Candidate source states for
+            edge selection.
+        dest_states (list of int): Infectious states.
+        dest_candidate_states (list of int): Candidate destination states for
+            edge selection.
+        beta (numpy.ndarray): Per-node non-family transmission rate,
+            shape ``(num_nodes, 1)``.
+        beta_in_family (numpy.ndarray): Per-node family transmission rate,
+            shape ``(num_nodes, 1)``.
+
+    Returns:
+        numpy.ndarray: Per-node binary exposure indicator, shape
+        ``(num_nodes, 1)``.
     """
 
     main_s = time.time()
@@ -257,10 +339,42 @@ def prob_of_contact_old(model, source_states, source_candidate_states, dest_stat
 
 
 def prob_of_contact(model, source_states, source_candidate_states, dest_states, dest_candidate_states, beta, beta_in_family):
-    """
-    Evaluates if transition happens.
-    Edge goes from source to dest, dest is the infected node, source is the one that can become exposed. 
-    Source_candidate_states and dest_candidate_states are here for backward compatibility and are not used any more.
+    """Evaluate per-node exposure via stochastic edge activation (production).
+
+    For each graph edge, independently activates it with the edge's daily
+    contact probability.  For active edges connecting a susceptible source to
+    an infectious destination, draws a Bernoulli trial with the effective
+    transmission rate (accounting for family vs. non-family edges and
+    asymptomatic reduction).  Returns a binary indicator vector: 1 for each
+    node that was exposed on this day.
+
+    *source_candidate_states* and *dest_candidate_states* are accepted for
+    backward compatibility but are no longer used; the function queries all
+    edges.
+
+    Updates the following model statistics:
+
+    * ``model.contact_history`` – active edge contacts.
+    * ``model.successfull_source_of_infection`` – per-node successful
+      infection counts.
+    * ``model.stat_successfull_layers`` – per-layer successful transmission
+      counts.
+
+    Args:
+        model: The active simulation model instance.
+        source_states (list of int): States that can become exposed.
+        source_candidate_states (list of int): Unused (backward compat.).
+        dest_states (list of int): Infectious states.
+        dest_candidate_states (list of int): Unused (backward compat.).
+        beta (numpy.ndarray): Per-node non-family transmission rate,
+            shape ``(num_nodes, 1)``.
+        beta_in_family (numpy.ndarray): Per-node family transmission rate,
+            shape ``(num_nodes, 1)``.
+
+    Returns:
+        numpy.ndarray: Per-node binary exposure indicator, shape
+        ``(num_nodes, 1)``.  Value is 1 if the node was newly exposed, 0
+        otherwise.
     """
 
     # source_states - states that can be infected

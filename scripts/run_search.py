@@ -1,3 +1,19 @@
+"""Command-line script for hyperparameter search on MAIS epidemic models.
+
+Loads a model configuration and a hyperparameter search configuration (JSON),
+then runs the selected search method (grid search or CMA-ES) to minimise a
+specified loss function (RMSE, MAE, or R²) against observed gold data.
+
+Typical usage::
+
+    python run_search.py config.ini gridsearch.json \\
+        --fit_data ../data/fit_data/fit_me.csv \\
+        --return_func rmse --n_jobs 4
+
+Results are saved as a CSV file in the directory specified by ``--out_dir``.
+An optional evolution log can be written with ``-l``.
+"""
+
 import timeit
 import random
 import pandas as pd
@@ -14,6 +30,35 @@ from utils.config_utils import ConfigFile
 
 
 def load_gold_data(csv_path, first_n_zeros=0, data_column=2, from_day=0, until_day=None, use_dates=False):
+    """Load and pre-process observed (gold) data for model fitting.
+
+    Reads a CSV file, aligns its time index, optionally pads the beginning
+    with zero-valued rows, and returns a DataFrame with ``"day"`` and
+    ``"infected"`` columns sliced to the requested day range.
+
+    Forward-fill is applied to handle any missing values in the data column.
+
+    Args:
+        csv_path (str): Path to the CSV file containing observed data.  The
+            file must have either a ``"datum"`` column (parsed as dates when
+            ``use_dates=True``) or a ``"T"`` column with day indices.
+        first_n_zeros (int): Number of zero-valued days to prepend.  The
+            existing day indices are shifted by this value.  Defaults to ``0``.
+        data_column (int or str): Either the integer column position (0-based)
+            or the string column name of the observed values.  Defaults to
+            ``2``.
+        from_day (int): First row index (0-based) to include after all
+            pre-processing.  Defaults to ``0``.
+        until_day (int or None): Exclusive upper row index.  ``None`` means
+            include all remaining rows.  Defaults to ``None``.
+        use_dates (bool): If ``True``, derive day indices from the ``"datum"``
+            column (parsed as dates, with day 0 = the first date).  Otherwise
+            use the ``"T"`` column.  Defaults to ``False``.
+
+    Returns:
+        pandas.DataFrame: DataFrame with columns ``"day"`` (int) and
+        ``"infected"`` (float), sliced to ``[from_day, until_day)``.
+    """
     df = pd.read_csv(csv_path)
 
     if use_dates:
