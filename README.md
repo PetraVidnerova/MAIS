@@ -2,7 +2,18 @@
 # <img src="./doc/fig/mais.png" style="float: left;" width="5%"/> MAIS &nbsp; &nbsp; <a href="https://doi.org/10.5281/zenodo.16421566"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.16421566.svg" style="float: right;"/></a>
 ## Multi-Agent Information/Infection Spread Model 
 
+**Martin Bakoš**<sup>1</sup>,  **Roman Neruda**<sup>1, 2</sup>, **Gabriela Suchopárová**<sup>1</sup>, **Josef Šlerka**<sup>1</sup>, **Vít Tuček**<sup>1</sup>, **Petra Vidnerová**<sup>1,2</sup>
 
+<sup>1</sup> Faculty of Arts, Charles University
+
+<sup>2</sup> Institute of Computer Science, The Czech Academy of Sciences
+
+This work was supported by the European Regional Development Fund project “Beyond Security: Role of Conflict in Resilience-Building”  (reg. no.: CZ.02.01.01/00/22\_008/0004595)
+
+<img alt="image" src="logo/logo.jpg" width="80%"/>
+
+
+<hr> 
 
 <!--- PDF BREAK -->
 
