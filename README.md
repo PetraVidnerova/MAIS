@@ -326,6 +326,7 @@ cd scripts
 python plot_experiments.py \
     ../data/output/model/history_higgs_run_*.zip \
     --column inc_I \
+    --fit_me ../data/fit_data/retweets.csv \
     --out_file ../data/output/higgs_result.png
 ```
 
