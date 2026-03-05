@@ -27,12 +27,16 @@ This work was supported by the European Regional Development Fund project “Bey
   - [Using pip](#using-pip)
   - [Using conda](#using-conda)
   - [Optional: graph-tool](#optional-graph-tool)
+- [Quick Start](#quick-start)
 - [Usage](#usage)
   - [Running your experiments](#1-running-your-experiments)
-  - [Result visualisation](#3-result-visualisation)
-  - [Animation](#4-animation)
-  - [Complete example: Higgs Twitter dataset](#5-complete-example-higgs-twitter-dataset)
+  - [Result visualisation](#2-result-visualisation)
+  - [Animation](#3-animation)
+  - [Complete example: Higgs Twitter dataset](#4-complete-example-higgs-twitter-dataset)
 - [Configuration and Advanced Features](#configuration-and-advanced-features)
+- [Citation](#citation)
+- [License](#license)
+- [Contributing](#contributing)
 
 ## Models
 
@@ -170,7 +174,7 @@ MAIS/
 └── doc/                 # Documentation and figures
 ```
 
-# Installation
+## Installation
 
 ### Using uv (recommended)
 
@@ -221,7 +225,18 @@ conda install -c conda-forge graph-tool
 
 **Troubleshooting:** Graph-tool often takes extreme amount of time to install. In such case, it helps to first install `graph-tool` into a clean new environment, and then install the rest of the packages.
 
-# Usage
+## Quick Start
+
+Run a simple information spread simulation on the toy Verona graph:
+
+```console
+uv sync
+cd scripts
+uv run python run_experiment.py -r ../config/verona_sir.ini my_first_run
+uv run python plot_experiments.py ../data/output/model/history_my_first_run*.csv --out_file ../data/output/result.png
+```
+
+## Usage
 
 All the executable scripts are located in the [scripts](scripts) subfolder. So first of all run:
 
@@ -269,14 +284,14 @@ By default it produces a ZIP file with the resulting history files. You can chan
 will be stored as one data frame in the feather format. The resulting file is stored in the directory specified
 by `output_dir` and its name has a prefix `history_my_experiment`.
 
-### 3. Result visualisation
+### 2. Result visualisation
 
 Now you can create a plot from the resulting files and save it to the path specified by `--out_file PATH_TO_IMG`.
 
 ```console
 python plot_experiments.py ../data/output/model/history_my_experiment_*.zip --out_file ./example_img.png
 ```
-### 4. Animation 
+### 3. Animation
 
  If you want to run animation, you need to have a file with node states from a simulation run. This file is generated if you use 
 
@@ -295,7 +310,7 @@ python animate.py ../config/verona_ani.ini --nodes_file ../data/output/model/nod
 ```
 
 
-### 5. Complete example: Higgs Twitter dataset
+### 4. Complete example: Higgs Twitter dataset
 
 This section walks through the full workflow for the [Higgs Twitter dataset](https://snap.stanford.edu/data/higgs-twitter.html) — a real-world graph of ~450k nodes capturing retweet activity around the discovery of the Higgs boson (July 2012).
 
@@ -365,4 +380,26 @@ python plot_experiments.py \
 
 Please consult [How to run simulations](doc/run.md) for options of individual scripts,
 [INI file specification](doc/inifile.md), and [How to fit the parameters](doc/run.md#6-fitting-your-model).
+
+## Citation
+
+If you use MAIS in your research, please cite:
+
+```bibtex
+@software{mais2025,
+  author    = {Bakoš, Martin and Neruda, Roman and Suchopárová, Gabriela and Šlerka, Josef and Tuček, Vít and Vidnerová, Petra},
+  title     = {{MAIS}: Multi-Agent Information/Infection Spread Model},
+  year      = {2025},
+  doi       = {10.5281/zenodo.16421566},
+  url       = {https://github.com/PetraVidnerova/MAIS}
+}
+```
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+## Contributing
+
+Contributions are welcome! Please open an [issue](https://github.com/PetraVidnerova/MAIS/issues) to report bugs or suggest features, or submit a pull request.
 
