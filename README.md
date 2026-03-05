@@ -112,23 +112,83 @@ Please follow the links to find out more details about the examples presented.
   </tr>
 </table> 
 
+## Project Structure
+
+```
+MAIS/
+├── src/
+│   ├── models/          # Core simulation models and engines
+│   │   ├── agent_based_network_model.py   # SimulationDrivenModel (infection spread)
+│   │   ├── agent_info_models.py           # InfoSIRModel, InfoTippingModel, RumourModel, RumourModelInfo
+│   │   ├── engine.py, engine_daily.py, …  # Simulation engine variants
+│   │   ├── states.py                      # Agent state definitions
+│   │   └── model_zoo.py, load_model.py    # Model registry and loading
+│   ├── policies/        # Policy modules (contact tracing, testing, vaccination, quarantine, …)
+│   ├── graphs/          # Graph generation and loading
+│   ├── model_m/         # Extended "Model M" variant
+│   ├── hyperparam_search/  # CMA-ES and grid search for parameter fitting
+│   └── utils/           # Config parsing, plotting, history, random seeds, sparse utilities
+├── scripts/             # Entry points: run_experiment, run_multi_experiment, plot_experiments, run_search
+├── config/              # INI files for experiments, policy and model parameters
+│   ├── model_params/
+│   ├── policy_params/
+│   └── hyperparam_search/
+├── data/
+│   ├── m-input/         # Input graphs (demo, papertown, verona, higgs-twitter)
+│   ├── fit_data/        # Fitting target data
+│   └── output/          # Simulation output (model results, graphs, images)
+└── doc/                 # Documentation and figures
+```
+
 # Installation
 
-All the requirements can be installed using [conda](https://docs.conda.io/en/latest/) (plus some packages using pip):
+### Using uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is the fastest way to get started:
+
+```console
+uv sync
+```
+
+This creates a virtual environment and installs all dependencies from `pyproject.toml`.
+To run scripts within the environment use `uv run`:
+
+```console
+uv run python scripts/run_experiment.py -r config/verona_sir.ini my_experiment
+```
+
+Or activate the environment manually:
+
+```console
+source .venv/bin/activate
+```
+
+### Using pip
+
+```console
+python -m venv .venv
+source .venv/bin/activate
+pip install .
+```
+
+### Using conda
 
 ```console
 conda create -n mais python=3.12 -y
 conda activate mais
 conda install --file requirements_conda.txt -y
-pip install -r requirements.txt 
+pip install -r requirements.txt
 ```
-**Optional:** If you want to create an animation from your simulation (script [animate.py](scripts/animate.py)) or you want to use `Spreader policy` function for information spread seeding, install `graph-tool`: 
+
+### Optional: graph-tool
+
+If you want to create an animation from your simulation (script [animate.py](scripts/animate.py)) or use the `Spreader policy` function for information spread seeding, install `graph-tool`:
+
 ```console
 conda install -c conda-forge graph-tool
 ```
-**Troubleshooting:** Graph-tool often takes extreme amount of time to install. In such case, it helps to first install `graph-tool` into the clean new environment, and second install the rest of  packages.
 
-<!--For other options and/or more help please refer to the [installation instructions](doc/installation.md).-->
+**Troubleshooting:** Graph-tool often takes extreme amount of time to install. In such case, it helps to first install `graph-tool` into a clean new environment, and then install the rest of the packages.
 
 # Usage
 
