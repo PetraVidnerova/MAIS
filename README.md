@@ -154,7 +154,8 @@ This creates a virtual environment and installs all dependencies from `pyproject
 To run scripts within the environment use `uv run`:
 
 ```console
-uv run python scripts/run_experiment.py -r config/verona_sir.ini my_experiment
+cd scripts
+uv run python run_experiment.py -r ../config/verona_sir.ini my_experiment
 ```
 
 Or activate the environment manually:
