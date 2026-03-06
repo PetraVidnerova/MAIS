@@ -34,6 +34,7 @@ This work was supported by the European Regional Development Fund project “Bey
   - [Animation](#3-animation)
   - [Complete example: Higgs Twitter dataset](#4-complete-example-higgs-twitter-dataset)
 - [Configuration and Advanced Features](#configuration-and-advanced-features)
+- [API Documentation](#api-documentation)
 - [Citation](#citation)
 - [License](#license)
 - [Contributing](#contributing)
@@ -380,6 +381,17 @@ python plot_experiments.py \
 
 Please consult [How to run simulations](doc/run.md) for options of individual scripts,
 [INI file specification](doc/inifile.md), and [How to fit the parameters](doc/run.md#6-fitting-your-model).
+
+## API Documentation
+
+Full API reference documentation for all source modules and scripts is generated with [Sphinx](https://www.sphinx-doc.org/). To build it locally:
+
+```console
+cd docs
+make html
+```
+
+The output is written to `docs/build/html/`. Open `docs/build/html/index.html` in a browser to browse the docs.
 
 ## Citation
 
