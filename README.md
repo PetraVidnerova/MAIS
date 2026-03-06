@@ -384,14 +384,19 @@ Please consult [How to run simulations](doc/run.md) for options of individual sc
 
 ## API Documentation
 
-Full API reference documentation for all source modules and scripts is generated with [Sphinx](https://www.sphinx-doc.org/). To build it locally:
+Full API reference documentation for all source modules and scripts is generated with [Sphinx](https://www.sphinx-doc.org/) and published automatically to **GitHub Pages** on every push to `main`.
+
+Browse the docs online at:
+**https://petravidnerova.github.io/MAIS/**
+
+To build the docs locally:
 
 ```console
 cd docs
 make html
 ```
 
-The output is written to `docs/build/html/`. Open `docs/build/html/index.html` in a browser to browse the docs.
+The output is written to `docs/build/html/`. Open `docs/build/html/index.html` in a browser.
 
 ## Citation
 
