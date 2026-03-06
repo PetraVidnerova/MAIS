@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>light &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>light</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for light</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Light-weight graph representation for agent-based network simulations.</span>
+
+<span class="sd">This module provides the ``LightGraph`` class, which stores a multi-layer</span>
+<span class="sd">undirected graph as a collection of NumPy arrays and a compressed sparse</span>
+<span class="sd">row (CSR) adjacency matrix.  It is designed to be considerably faster than</span>
+<span class="sd">NetworkX for the high-throughput edge queries required by epidemic and</span>
+<span class="sd">information-spread models.</span>
+
+<span class="sd">Typical workflow:</span>
+
+<span class="sd">1. Build a ``LightGraph`` from CSV files with :meth:`LightGraph.read_csv`.</span>
+<span class="sd">2. Pickle the result for repeated simulation runs.</span>
+<span class="sd">3. Clone per-run state cheaply with :meth:`LightGraph.copy`.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">operator</span><span class="w"> </span><span class="kn">import</span> <span class="n">iconcat</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">reduce</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">itertools</span><span class="w"> </span><span class="kn">import</span> <span class="n">chain</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numexpr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ne</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">copy</span><span class="w"> </span><span class="kn">import</span> <span class="n">copy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.sparse</span><span class="w"> </span><span class="kn">import</span> <span class="n">csr_matrix</span><span class="p">,</span> <span class="n">lil_matrix</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+
+<span class="c1"># import os</span>
+<span class="c1"># os.environ[&quot;NUMEXPR_MAX_THREADS&quot;] = &quot;272&quot;  # to fix numexpr complains</span>
+
+
+<div class="viewcode-block" id="concat_lists">
+<a class="viewcode-back" href="../src_modules.html#light.concat_lists">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">concat_lists</span><span class="p">(</span><span class="n">l</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the concatenation of all lists contained in an iterable.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        l (iterable): An iterable whose elements are lists (or other</span>
+<span class="sd">            iterables) to be concatenated.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list: A single flat list produced by chaining every element of ``l``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="n">chain</span><span class="o">.</span><span class="n">from_iterable</span><span class="p">(</span><span class="n">l</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="LightGraph">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">LightGraph</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph for agent-based network models stored as NumPy arrays.</span>
+
+<span class="sd">    NetworkX proved too slow for the high-throughput edge queries needed by</span>
+<span class="sd">    large-scale simulations.  ``LightGraph`` therefore stores the graph as a</span>
+<span class="sd">    collection of plain NumPy arrays together with a CSR adjacency matrix</span>
+<span class="sd">    whose non-zero values are indices into those arrays.</span>
+
+<span class="sd">    Typical usage is to load the graph from CSV files once with</span>
+<span class="sd">    :meth:`read_csv` and then pickle the result for future simulation runs,</span>
+<span class="sd">    because building from CSV is comparatively slow.</span>
+
+<span class="sd">    Nodes carry integer IDs that are user-visible, but internally (and in the</span>
+<span class="sd">    model) nodes are addressed by their positional index in the original</span>
+<span class="sd">    nodes file.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        random_seed (int or None): The seed passed to ``numpy.random.seed``</span>
+<span class="sd">            at construction time, stored for reproducibility bookkeeping.</span>
+<span class="sd">        edge_repo: Internal edge repository (populated by :meth:`read_csv`).</span>
+<span class="sd">        A (scipy.sparse.csr_matrix or None): Adjacency matrix whose non-zero</span>
+<span class="sd">            entries hold edge-repository keys.  ``None`` until</span>
+<span class="sd">            :meth:`read_csv` has been called.</span>
+<span class="sd">        is_quarantined (numpy.ndarray or None): Per-node quarantine counter.</span>
+<span class="sd">            ``None`` until the first quarantine operation.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        random_seed (int, optional): Seed for NumPy&#39;s random number</span>
+<span class="sd">            generator.  ``None`` leaves the global state unchanged.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># __slots__ = [&#39;e_types&#39;, &#39;e_subtypes&#39;, &#39;e_probs&#39;, &#39;e_intensities&#39;, &#39;e_source&#39;, &#39;e_dest&#39;, &#39;e_valid&#39;, &#39;edges_repo&#39;,</span>
+    <span class="c1"># &#39;edges_directions&#39;, &#39;__dict__&#39;] # not really helpful here, beneficial only for lots of small objects</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">random_seed</span><span class="p">:</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span> <span class="o">=</span> <span class="n">random_seed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">edge_repo</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="LightGraph.read_csv">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.read_csv">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">read_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">path_to_nodes</span><span class="o">=</span><span class="s1">&#39;p.csv&#39;</span><span class="p">,</span>
+                 <span class="n">path_to_external</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">path_to_layers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">path_to_edges</span><span class="o">=</span><span class="s1">&#39;edges.csv&#39;</span><span class="p">,</span>
+                 <span class="n">path_to_quarantine</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">path_to_layer_groups</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Load graph data from CSV files and build internal data structures.</span>
+
+<span class="sd">        Reads node attributes, edge lists, layer definitions, optional</span>
+<span class="sd">        external nodes, optional quarantine coefficients and optional layer</span>
+<span class="sd">        groups.  After this call the graph is ready to use.</span>
+
+<span class="sd">        Self-loops are silently dropped with a warning.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            path_to_nodes (str): Path to the primary nodes CSV file.</span>
+<span class="sd">                Defaults to ``&#39;p.csv&#39;``.</span>
+<span class="sd">            path_to_external (str, optional): Path to an optional secondary</span>
+<span class="sd">                nodes CSV file (e.g. external / virtual nodes).  When</span>
+<span class="sd">                ``None`` no external nodes are added.</span>
+<span class="sd">            path_to_layers (str, optional): Path to a CSV file defining</span>
+<span class="sd">                layer IDs, names and weights.  When ``None`` a minimal</span>
+<span class="sd">                two-layer default is used (layers 0 and 1).</span>
+<span class="sd">            path_to_edges (str): Path to the edges CSV file.</span>
+<span class="sd">                Defaults to ``&#39;edges.csv&#39;``.  Required columns are</span>
+<span class="sd">                ``vertex1``, ``vertex2``; optional columns are ``layer``,</span>
+<span class="sd">                ``sublayer``, ``probability`` and ``intensity`` (all</span>
+<span class="sd">                back-filled with sensible defaults when absent).</span>
+<span class="sd">            path_to_quarantine (str, optional): Path to a two-column</span>
+<span class="sd">                headerless CSV file mapping layer ID to quarantine</span>
+<span class="sd">                coefficient.  When ``None`` quarantine coefs are disabled.</span>
+<span class="sd">            path_to_layer_groups (str, optional): Path to a JSON file</span>
+<span class="sd">                defining named groups of layers.  When ``None`` layer groups</span>
+<span class="sd">                are disabled.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">csv_hacking</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;na_values&#39;</span><span class="p">:</span> <span class="s1">&#39;undef&#39;</span><span class="p">,</span> <span class="s1">&#39;skipinitialspace&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+        <span class="n">base_nodes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span>
+            <span class="n">path_to_nodes</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span><span class="o">.</span><span class="n">drop_duplicates</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+        
+        <span class="n">edges</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_edges</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+        <span class="c1"># ensure columns - for backward compatibility with model-M</span>
+        <span class="k">if</span> <span class="s2">&quot;layer&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;layer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="s2">&quot;sublayer&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;sublayer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="s2">&quot;probability&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;probability&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>
+        <span class="k">if</span> <span class="s2">&quot;intensity&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;intensity&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>
+        <span class="k">if</span> <span class="n">path_to_layers</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">layers</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">([{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;no_layer&quot;</span><span class="p">,</span> <span class="s2">&quot;weight&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">},</span>
+                                   <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="s2">&quot;weight&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">}])</span>
+        <span class="k">else</span><span class="p">:</span>   
+            <span class="n">layers</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_layers</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">path_to_external</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">external_nodes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_external</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">external_nodes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">()</span>
+
+        <span class="n">nodes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">base_nodes</span><span class="p">,</span> <span class="n">external_nodes</span><span class="p">],</span>
+                          <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;index&quot;</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="n">path_to_quarantine</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_quarantine</span><span class="p">,</span> <span class="n">header</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">index_col</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">i</span><span class="p">:</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span>
+            <span class="p">}</span>
+
+        <span class="k">if</span> <span class="n">path_to_layer_groups</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path_to_layer_groups</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">LAYER_GROUPS</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">LAYER_GROUPS</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># layer names, ids and weights go to graph</span>
+        <span class="n">layers_to_add</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s1">&#39;list&#39;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_ids</span> <span class="o">=</span> <span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_name</span> <span class="o">=</span> <span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;weight&#39;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+
+        <span class="c1"># nodes</span>
+        <span class="c1"># select categorical columns</span>
+        <span class="n">cat_columns</span> <span class="o">=</span> <span class="n">nodes</span><span class="o">.</span><span class="n">select_dtypes</span><span class="p">([</span><span class="s1">&#39;object&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">columns</span>
+        <span class="n">nodes</span><span class="p">[</span><span class="n">cat_columns</span><span class="p">]</span> <span class="o">=</span> <span class="n">nodes</span><span class="p">[</span><span class="n">cat_columns</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s1">&#39;category&#39;</span><span class="p">))</span>
+
+        <span class="c1"># save codes for backward conversion</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cat_table</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">col</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">nodes</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">cat</span><span class="o">.</span><span class="n">categories</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">cat_columns</span>
+        <span class="p">}</span>
+
+        <span class="c1"># covert categorical to numbers</span>
+        <span class="n">nodes</span><span class="p">[</span><span class="n">cat_columns</span><span class="p">]</span> <span class="o">=</span> <span class="n">nodes</span><span class="p">[</span><span class="n">cat_columns</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">cat</span><span class="o">.</span><span class="n">codes</span><span class="p">)</span>
+        <span class="c1"># pprint(nodes)</span>
+
+        <span class="c1"># just test of conversion back</span>
+        <span class="c1"># print(cat_columns)</span>
+        <span class="c1"># for col in list(cat_columns):</span>
+        <span class="c1">#     nodes[[col]] = nodes[[col]].apply(</span>
+        <span class="c1">#         lambda x: pd.Categorical.from_codes(</span>
+        <span class="c1">#             x, categories=cat_table[col])</span>
+        <span class="c1">#     )</span>
+        <span class="c1"># pprint(nodes)</span>
+
+        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">nodes</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;nodes_&quot;</span><span class="o">+</span><span class="n">col</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">nodes</span><span class="p">[</span><span class="n">col</span><span class="p">]))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">nodes</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_base_nodes</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">base_nodes</span><span class="p">)</span>
+
+<span class="w">        </span><span class="sd">&quot;&quot;&quot; if self.num_nodes &gt; 65535:</span>
+<span class="sd">            raise ValueError(</span>
+<span class="sd">                &quot;Number of nodes too high (we are using unit16, change it to unit32 for higher numbers of nodes.&quot;)</span>
+<span class="sd"> &quot;&quot;&quot;</span>
+        <span class="c1">#        self.ignored = set(external_nodes[&quot;id&quot;])</span>
+
+        <span class="c1"># edges</span>
+        <span class="c1"># drop self edges</span>
+        <span class="n">indexNames</span> <span class="o">=</span> <span class="n">edges</span><span class="p">[</span><span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex1&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex2&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">index</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indexNames</span><span class="p">):</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Warning: dropping self edges!!!!&quot;</span><span class="p">)</span>
+            <span class="n">edges</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">indexNames</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># fill edges to a graph</span>
+        <span class="n">n_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span>
+        <span class="c1"># edges data&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_subtypes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_probs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_intensities</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_active</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;bool&quot;</span><span class="p">)</span>
+
+        <span class="c1"># if value == 2 than is valid, other numbers prob in quarantine</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n_edges</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+        <span class="c1"># edges repo which will eventually be list of sets and not a dict</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="mi">0</span><span class="p">:</span> <span class="p">[]</span>
+        <span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="mi">0</span><span class="p">:</span> <span class="p">[]</span>
+        <span class="p">}</span>
+        <span class="n">key</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="c1"># working matrix</span>
+        <span class="n">tmpA</span> <span class="o">=</span> <span class="n">lil_matrix</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+
+        <span class="n">forward_edge</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">backward_edge</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="n">id_dict</span> <span class="o">=</span> <span class="p">{</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes_id</span><span class="p">[</span><span class="n">i</span><span class="p">]:</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)}</span>
+
+        <span class="c1"># fill data and get indicies</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">edges</span><span class="o">.</span><span class="n">itertuples</span><span class="p">()):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">layer</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_subtypes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">sublayer</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_probs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">probability</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_intensities</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">intensity</span>
+
+            <span class="c1"># if row.vertex1 in self.ignored or row.vertex2 in self.ignored:</span>
+            <span class="c1">#     continue</span>
+
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">i_row</span> <span class="o">=</span> <span class="n">id_dict</span><span class="p">[</span><span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">]</span>
+                <span class="n">i_col</span> <span class="o">=</span> <span class="n">id_dict</span><span class="p">[</span><span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">]</span>
+            <span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Node does not exist&quot;</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">,</span> <span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes_id</span> <span class="o">==</span> <span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">),</span>
+                      <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes_id</span> <span class="o">==</span> <span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">))</span>
+                <span class="n">exit</span><span class="p">()</span>
+
+            <span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">i_row</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">i_col</span>
+
+            <span class="k">if</span> <span class="n">tmpA</span><span class="p">[</span><span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># first edge between (row, col)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">key</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="n">i</span><span class="p">],</span> <span class="n">forward_edge</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">key</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">key</span> <span class="o">+</span>
+                                                                <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">backward_edge</span>
+                <span class="n">tmpA</span><span class="p">[</span><span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">key</span>
+                <span class="n">tmpA</span><span class="p">[</span><span class="n">i_col</span><span class="p">,</span> <span class="n">i_row</span><span class="p">]</span> <span class="o">=</span> <span class="n">key</span> <span class="o">+</span> <span class="mi">1</span>
+                <span class="n">key</span> <span class="o">+=</span> <span class="mi">2</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># add to existing edge list</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;+&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+                <span class="n">key_forward</span> <span class="o">=</span> <span class="n">tmpA</span><span class="p">[</span><span class="n">i_row</span><span class="p">,</span> <span class="n">i_col</span><span class="p">]</span>
+                <span class="n">key_backward</span> <span class="o">=</span> <span class="n">tmpA</span><span class="p">[</span><span class="n">i_col</span><span class="p">,</span> <span class="n">i_row</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">key_forward</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+                <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">key_forward</span><span class="p">]</span> <span class="o">==</span> <span class="n">forward_edge</span>
+                <span class="c1"># self.edges_directions[key_forward].append(forward_edge)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">key_backward</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+                <span class="c1"># self.edges_directions[key_backward].append(backward_edge)</span>
+                <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">key_backward</span><span class="p">]</span> <span class="o">==</span> <span class="n">backward_edge</span>
+
+            <span class="k">if</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Edges loaded&quot;</span><span class="p">,</span> <span class="n">i</span><span class="p">)</span>
+
+        <span class="c1"># create matrix (A[i,j] is an index of edge (i,j) in array of edges)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Converting lil_matrix A to csr ...&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="n">csr_matrix</span><span class="p">(</span><span class="n">tmpA</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;level done&quot;</span><span class="p">)</span>
+        <span class="k">del</span> <span class="n">tmpA</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Converting edges_repo to list ...&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="c1"># data = [None]</span>
+        <span class="c1"># subedges_counts = [0]</span>
+        <span class="c1"># for i_key in range(1, key):</span>
+        <span class="c1">#     value_set = self.edges_repo[i_key]</span>
+        <span class="c1">#     # if len(value_list) &gt; 1:</span>
+        <span class="c1">#     #     print(i_key)</span>
+        <span class="c1">#     data.append(value_set)</span>
+        <span class="c1">#     subedges_counts.append(len(value_set))</span>
+        <span class="c1"># self.edges_repo = data</span>
+        <span class="c1"># the above can be replaced by</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+            <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="o">.</span><span class="n">values</span><span class="p">()),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+        <span class="n">subedges_counts</span> <span class="o">=</span> <span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">]</span>
+        <span class="c1"># subedges_counts = [len(s) for s in np.nditer(self.edges_repo, flags=[&#39;refs_ok&#39;], op_flags=[&#39;readonly&#39;])]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;level done&quot;</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Converting edges_directions to list ... &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="p">[</span><span class="kc">None</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">i_key</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+            <span class="n">dir_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">i_key</span><span class="p">]]</span> <span class="o">*</span> <span class="n">subedges_counts</span><span class="p">[</span><span class="n">i_key</span><span class="p">]</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">dir_list</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;level done&quot;</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Control check ... &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i_key</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+            <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">i_key</span><span class="p">])</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">i_key</span><span class="p">])</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;ok&quot;</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Precalculate array of layer weights ... &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_layer_weight</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;ok&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;LightGraph is ready to use.&quot;</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Max intensity </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">e_intensities</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">number_of_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Total number of nodes in the graph (base + external).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Number of nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+
+<div class="viewcode-block" id="LightGraph.get_nodes">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layer</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all node indices that have at least one edge on the given layer.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            layer (int): Layer ID to filter by.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Sorted array of unique node indices that participate</span>
+<span class="sd">            in at least one edge whose layer equals ``layer``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">e_types</span> <span class="o">==</span> <span class="n">layer</span><span class="p">]</span>
+        <span class="n">dests</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">e_types</span> <span class="o">==</span> <span class="n">layer</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">union1d</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span> <span class="n">dests</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_edges_nodes">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="n">edges_dirs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the source and destination node indices for a set of edges.</span>
+
+<span class="sd">        Edges are stored with an arbitrary orientation (smaller index as</span>
+<span class="sd">        source).  ``edges_dirs`` corrects for this: when ``True`` the stored</span>
+<span class="sd">        source is the logical source; when ``False`` the stored destination is</span>
+<span class="sd">        the logical source.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D array of edge indices.</span>
+<span class="sd">            edges_dirs (numpy.ndarray): Boolean array of the same length as</span>
+<span class="sd">                ``edges``.  ``True`` means *forward* direction (source →</span>
+<span class="sd">                dest); ``False`` means *backward* direction.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple[numpy.ndarray, numpy.ndarray]: A pair</span>
+<span class="sd">            ``(source_nodes, dest_nodes)`` where each element is a 1-D</span>
+<span class="sd">            integer array of node indices aligned with ``edges``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="n">dests</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="c1"># sources, dests numpy vectors on nodes</span>
+        <span class="c1"># edges_dirs - bool vector</span>
+        <span class="c1"># if True take source if False take dest</span>
+        <span class="n">flags</span> <span class="o">=</span> <span class="n">edges_dirs</span>
+        <span class="c1"># print(edges_dirs)</span>
+        <span class="n">source_nodes</span> <span class="o">=</span> <span class="n">sources</span> <span class="o">*</span> <span class="n">flags</span> <span class="o">+</span> <span class="n">dests</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">flags</span><span class="p">)</span>
+        <span class="n">dest_nodes</span> <span class="o">=</span> <span class="n">sources</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">flags</span><span class="p">)</span> <span class="o">+</span> <span class="n">dests</span> <span class="o">*</span> <span class="n">flags</span>
+        <span class="k">return</span> <span class="n">source_nodes</span><span class="p">,</span> <span class="n">dest_nodes</span></div>
+
+
+        <span class="c1">#    def get_edges_subset(self, source_flags, dest_flags):</span>
+        <span class="c1">#        active_subset = self.A[source_flags == 1, :][:, dest_flags == 1]</span>
+        <span class="c1">#        edge_lists = [self.edges_repo[key] for key in active_subset.data]</span>
+        <span class="c1">#        return subset, sum(edge_lists, [])</span>
+
+<div class="viewcode-block" id="LightGraph.get_edges">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_flags</span><span class="p">,</span> <span class="n">dest_flags</span><span class="p">,</span> <span class="n">dirs</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all edges between two sets of nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            source_flags (numpy.ndarray): Binary vector of length</span>
+<span class="sd">                ``num_nodes``.  A value of ``1`` marks nodes in the first</span>
+<span class="sd">                (source) set.</span>
+<span class="sd">            dest_flags (numpy.ndarray): Binary vector of length</span>
+<span class="sd">                ``num_nodes``.  A value of ``1`` marks nodes in the second</span>
+<span class="sd">                (destination) set.</span>
+<span class="sd">            dirs (bool): When ``True`` (default) also return direction flags</span>
+<span class="sd">                alongside the edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple[numpy.ndarray, numpy.ndarray] or numpy.ndarray:</span>
+<span class="sd">            If ``dirs`` is ``True``, returns ``(edges, directions)`` where</span>
+<span class="sd">            ``edges`` is a 1-D integer array of edge indices and</span>
+<span class="sd">            ``directions`` is a corresponding boolean array (``True`` =</span>
+<span class="sd">            forward).  If ``dirs`` is ``False``, only ``edges`` is returned.</span>
+<span class="sd">            Both arrays are empty when no edges exist between the two sets.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">active_subset</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">source_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span> <span class="p">:][:,</span> <span class="n">dest_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">active_edges_indices</span> <span class="o">=</span> <span class="n">active_subset</span><span class="o">.</span><span class="n">data</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_edges_indices</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([]),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span>
+        <span class="n">edge_lists</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">active_edges_indices</span><span class="p">]</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">concat_lists</span><span class="p">(</span><span class="n">edge_lists</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">dirs</span><span class="p">:</span>
+            <span class="n">dirs_lists</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_directions</span><span class="p">[</span><span class="n">active_edges_indices</span><span class="p">]</span>
+            <span class="n">result_dirs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">concat_lists</span><span class="p">(</span><span class="n">dirs_lists</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">result</span><span class="p">,</span> <span class="n">result_dirs</span>
+        <span class="k">return</span> <span class="n">result</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_nodes_edges">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes_edges">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all edge indices adjacent to a set of nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (array-like): Node indices whose incident edges are</span>
+<span class="sd">                requested.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list: Flat list of edge indices (possibly with duplicates when</span>
+<span class="sd">            multiple nodes share an edge).  Returns an empty list when</span>
+<span class="sd">            ``nodes`` is empty or when none of the nodes have any edges.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">[]</span>
+        <span class="n">active_subset</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span>
+        <span class="n">active_edges_indices</span> <span class="o">=</span> <span class="n">active_subset</span><span class="o">.</span><span class="n">data</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_edges_indices</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Warning: no edges for nodes  </span><span class="si">{</span><span class="n">nodes</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="p">[]</span>
+        <span class="n">edge_lists</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">active_edges_indices</span><span class="p">]</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">concat_lists</span><span class="p">(</span><span class="n">edge_lists</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_nodes_edges_on_layers">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes_edges_on_layers">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes_edges_on_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">layers</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return incident edge indices for a set of nodes filtered by layer.</span>
+
+<span class="sd">        Identical to :meth:`get_nodes_edges` but restricts the result to</span>
+<span class="sd">        edges whose layer ID appears in ``layers``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (array-like): Node indices whose incident edges are</span>
+<span class="sd">                requested.</span>
+<span class="sd">            layers (array-like): Allowed layer IDs.  Only edges on one of</span>
+<span class="sd">                these layers are included in the result.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list: Flat list of edge indices that belong to one of the</span>
+<span class="sd">            specified layers.  Returns an empty list when no matching edges</span>
+<span class="sd">            are found.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">edges</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_nodes_edges</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">edges</span>
+        <span class="n">edges_layers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="n">selected_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">edges_layers</span><span class="p">,</span> <span class="n">layers</span><span class="p">)</span>
+        <span class="c1"># todo: list or convert to numpy array?</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">x</span>
+                <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">selected_edges</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.switch_off_edges">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.switch_off_edges">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">switch_off_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Permanently deactivate a list of edges.</span>
+
+<span class="sd">        Sets ``e_active`` to ``False`` for each edge in ``edges``.  This</span>
+<span class="sd">        operation is independent of quarantine state and sets the effective</span>
+<span class="sd">        transmission probability to zero regardless of other factors.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (list): List of edge indices to deactivate.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_active</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.switch_on_edges">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.switch_on_edges">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">switch_on_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Reactivate a list of previously deactivated edges.</span>
+
+<span class="sd">        Reverses :meth:`switch_off_edges` by setting ``e_active`` back to</span>
+<span class="sd">        ``True``.  Does not interact with quarantine state.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (list): List of edge indices to reactivate.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_active</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_all_edges_probs">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_all_edges_probs">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_all_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute effective transmission probabilities for every edge.</span>
+
+<span class="sd">        Combines the raw per-edge probability (``e_probs``), the quarantine</span>
+<span class="sd">        validity flag (``e_valid``), the active flag (``e_active``) and the</span>
+<span class="sd">        layer weight into a single scalar per edge.  Uses ``numexpr`` for</span>
+<span class="sd">        fast vectorised evaluation.</span>
+
+<span class="sd">        When ``e_valid == 2`` the edge is fully active and the probability</span>
+<span class="sd">        is ``e_probs * layer_weight``.  Any other value of ``e_valid`` is</span>
+<span class="sd">        interpreted as an override probability (e.g. from quarantine) and</span>
+<span class="sd">        replaces ``e_probs`` directly.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Float array of length ``n_edges`` with effective</span>
+<span class="sd">            transmission probabilities in ``[0, 1]``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># probs = self.e_probs.copy()</span>
+        <span class="c1"># invalid = self.e_valid != 2</span>
+        <span class="c1"># probs[invalid] =  self.e_valid[invalid]</span>
+        <span class="c1"># weights = self.layer_weights[self.e_types]</span>
+        <span class="c1"># probs[self.e_active == False] = 0</span>
+        <span class="c1"># #        return ne.evaluate(&quot;probs * weights&quot;)</span>
+        <span class="c1"># return probs * weights</span>
+        <span class="k">return</span> <span class="n">ne</span><span class="o">.</span><span class="n">evaluate</span><span class="p">(</span><span class="s2">&quot;active * (e_probs * (e_valid == 2) + e_valid * (e_valid != 2)) * weights&quot;</span><span class="p">,</span>
+                           <span class="n">local_dict</span><span class="o">=</span><span class="p">{</span>
+                               <span class="s1">&#39;active&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_active</span><span class="p">,</span>
+                               <span class="s1">&#39;e_probs&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_probs</span><span class="p">,</span>
+                               <span class="s1">&#39;e_valid&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">,</span>
+                               <span class="s1">&#39;weights&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_layer_weight</span>
+                           <span class="p">}</span>
+                           <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_edges_probs">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_probs">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute effective transmission probabilities for a subset of edges.</span>
+
+<span class="sd">        Applies the same logic as :meth:`get_all_edges_probs` but only for</span>
+<span class="sd">        the requested edge indices.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Float array of the same length as ``edges`` with</span>
+<span class="sd">            effective transmission probabilities in ``[0, 1]``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="n">layer_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="n">probs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_probs</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">probs</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">weights</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_layer_weight</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_active</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span> <span class="o">*</span> <span class="n">probs</span> <span class="o">*</span> <span class="n">weights</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_edges_intensities">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_intensities">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_intensities</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the intensity values for a subset of edges.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Float array of the same length as ``edges``</span>
+<span class="sd">            containing the raw intensity value (``e_intensities``) for each</span>
+<span class="sd">            requested edge.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_intensities</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span></div>
+
+
+    <span class="c1"># these methods work only with hodonin&#39;s layers</span>
+<div class="viewcode-block" id="LightGraph.is_super_edge">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_super_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_super_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify super-spreader edges (Hodonin layer convention).</span>
+
+<span class="sd">        Super-spreader edges are defined as those with layer ID &gt;= 33.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of the same length as ``edges``,</span>
+<span class="sd">            ``True`` where the edge is a super-spreader edge.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="n">etypes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">etypes</span> <span class="o">&gt;=</span> <span class="mi">33</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.is_family_edge">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_family_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_family_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify household/family edges (Hodonin layer convention).</span>
+
+<span class="sd">        Family edges are those with layer ID 1 or 2.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of the same length as ``edges``,</span>
+<span class="sd">            ``True`` where the edge belongs to a family layer.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="n">etypes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="p">(</span><span class="n">etypes</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span> <span class="n">etypes</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.is_class_edge">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_class_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_class_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="nb">all</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify school/class edges (Hodonin layer convention).</span>
+
+<span class="sd">        School edges have layer IDs 4–11.  The ``all`` flag controls whether</span>
+<span class="sd">        all school types are included or only lower school levels (layers</span>
+<span class="sd">        4–7, excluding high school and higher elementary).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+<span class="sd">            all (bool): When ``True`` (default), include all school layers</span>
+<span class="sd">                (4–11).  When ``False``, restrict to layers 4–7.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of the same length as ``edges``,</span>
+<span class="sd">            ``True`` where the edge is a class/school edge.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="n">etypes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">all</span><span class="p">:</span>
+            <span class="c1"># all schools</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span><span class="n">etypes</span> <span class="o">&gt;=</span> <span class="mi">4</span><span class="p">,</span> <span class="n">etypes</span> <span class="o">&lt;=</span> <span class="mi">11</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># excepty high and higher elementary</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span><span class="n">etypes</span> <span class="o">&gt;=</span> <span class="mi">4</span><span class="p">,</span> <span class="n">etypes</span> <span class="o">&lt;=</span> <span class="mi">7</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.is_pub_edge">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_pub_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_pub_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify pub/bar edges (Hodonin layer convention).</span>
+
+<span class="sd">        Pub edges have layer IDs 20, 28 or 29.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            edges (numpy.ndarray): 1-D integer array of edge indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of the same length as ``edges``,</span>
+<span class="sd">            ``True`` where the edge represents a pub/bar contact.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+        <span class="n">etypes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">edges</span><span class="p">]</span>
+        <span class="c1"># pubs</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="p">(</span><span class="n">etypes</span> <span class="o">==</span> <span class="mi">20</span><span class="p">,</span>
+                             <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="p">(</span><span class="n">etypes</span> <span class="o">==</span> <span class="mi">28</span><span class="p">,</span> <span class="n">etypes</span> <span class="o">==</span> <span class="mi">29</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.modify_layers_for_nodes">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.modify_layers_for_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">modify_layers_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id_list</span><span class="p">,</span> <span class="n">what_by_what</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply quarantine by reducing edge probabilities for given nodes.</span>
+
+<span class="sd">        For every edge incident to a node in ``node_id_list`` that is not</span>
+<span class="sd">        already quarantined (``e_valid == 2``), the effective probability is</span>
+<span class="sd">        replaced by ``e_probs * coef`` (clipped to ``[0, 1]``), where</span>
+<span class="sd">        ``coef`` is the coefficient for that edge&#39;s layer taken from</span>
+<span class="sd">        ``what_by_what``.</span>
+
+<span class="sd">        The per-node quarantine counter ``is_quarantined`` is incremented so</span>
+<span class="sd">        that edges shared with still-quarantined nodes are not accidentally</span>
+<span class="sd">        restored by a partial release.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_id_list (array-like): Positional indices of nodes to</span>
+<span class="sd">                quarantine.</span>
+<span class="sd">            what_by_what (dict): Mapping of ``{layer_id: coefficient}``</span>
+<span class="sd">                specifying the multiplicative reduction per layer.  Must not</span>
+<span class="sd">                be empty.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If ``what_by_what`` is falsy (empty or ``None``).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">node_id_list</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">what_by_what</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;what_by_what missing or empty&quot;</span><span class="p">)</span>
+
+        <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_nodes_edges</span><span class="p">(</span><span class="n">node_id_list</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">relevant_edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># select edges to change (those who are not in quarantine)</span>
+        <span class="n">valid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">relevant_edges</span><span class="p">]</span>
+        <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">relevant_edges</span><span class="p">[</span><span class="n">valid</span> <span class="o">==</span> <span class="mi">2</span><span class="p">]</span>
+        <span class="n">edges_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">relevant_edges</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG edges that goes to quarantinexs </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">relevant_edges</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="c1"># print(edges_types)</span>
+        <span class="k">for</span> <span class="n">layer_type</span><span class="p">,</span> <span class="n">coef</span> <span class="ow">in</span> <span class="n">what_by_what</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="c1"># print(layer_type)</span>
+            <span class="n">edges_on_this_layer</span> <span class="o">=</span> <span class="n">relevant_edges</span><span class="p">[</span><span class="n">edges_types</span> <span class="o">==</span> <span class="n">layer_type</span><span class="p">]</span>
+            <span class="c1"># modify their probabilities</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges_on_this_layer</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_probs</span><span class="p">[</span><span class="n">edges_on_this_layer</span><span class="p">]</span> <span class="o">*</span> <span class="n">coef</span>
+            <span class="c1"># use out in clip to work inplace</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges_on_this_layer</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">,</span>
+                    <span class="mf">1.0</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">edges_on_this_layer</span><span class="p">])</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.recover_edges_for_nodes">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.recover_edges_for_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recover_edges_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">release</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore original edge probabilities when nodes leave quarantine.</span>
+
+<span class="sd">        Decrements the quarantine counter for each node in ``release``.</span>
+<span class="sd">        For nodes whose counter reaches zero (i.e. no longer quarantined on</span>
+<span class="sd">        any count), edges that connect two fully released nodes have their</span>
+<span class="sd">        ``e_valid`` flag reset to ``2`` (fully active).  Edges that still</span>
+<span class="sd">        touch a quarantined node are left unchanged.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            release (numpy.ndarray): Positional indices of nodes being</span>
+<span class="sd">                released from quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">release</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">no_quara</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">release</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="n">release</span> <span class="o">=</span> <span class="n">release</span><span class="p">[</span><span class="n">no_quara</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">release</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_nodes_edges</span><span class="p">(</span><span class="n">release</span><span class="p">))</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">relevant_edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Warning: recovering nodes with no edges&quot;</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="c1"># from source and dest nodes select those who are not in quarantine</span>
+        <span class="n">source_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">relevant_edges</span><span class="p">]</span>
+        <span class="n">dest_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">relevant_edges</span><span class="p">]</span>
+
+        <span class="n">is_quarrantined_source</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">source_nodes</span><span class="p">]</span>
+        <span class="n">is_quarrantined_dest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">dest_nodes</span><span class="p">]</span>
+
+        <span class="c1"># recover only edges where both nodes are free</span>
+        <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">relevant_edges</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">logical_not</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="p">(</span><span class="n">is_quarrantined_source</span><span class="p">,</span> <span class="n">is_quarrantined_dest</span><span class="p">))]</span>
+
+        <span class="c1"># recover probs</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_valid</span><span class="p">[</span><span class="n">relevant_edges</span><span class="p">]</span> <span class="o">=</span> <span class="mi">2</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.final_adjacency_matrix">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.final_adjacency_matrix">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">final_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return self for backward compatibility with older graph interfaces.</span>
+
+<span class="sd">        Earlier versions of the model expected a separate adjacency-matrix</span>
+<span class="sd">        object.  This shim allows code written against that interface to work</span>
+<span class="sd">        without modification.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            LightGraph: The graph instance itself.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.get_layer_for_edge">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_layer_for_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_layer_for_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">e</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the layer ID for a single edge.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            e (int): Edge index.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Layer ID of edge ``e``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">e</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.set_layer_weights">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.set_layer_weights">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">weights</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Replace the layer-weight vector and rebuild per-edge weight cache.</span>
+
+<span class="sd">        The per-edge weight array ``e_layer_weight`` is recomputed in-place</span>
+<span class="sd">        after the update so that subsequent probability calculations use the</span>
+<span class="sd">        new weights immediately.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            weights (array-like): New weight values indexed by layer ID.</span>
+<span class="sd">                Must be the same length as the current ``layer_weights``</span>
+<span class="sd">                array.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG Updating layer weights </span><span class="si">{</span><span class="n">weights</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">copyto</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">,</span> <span class="n">weights</span><span class="p">)</span>
+        <span class="c1">#    print(self.layer_weights[i])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_layer_weight</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">e_types</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG new weigths </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.close_layers">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.close_layers">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">close_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_layers</span><span class="p">,</span> <span class="n">coefs</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the weight of named layers to zero (or a custom coefficient).</span>
+
+<span class="sd">        Useful for simulating non-pharmaceutical interventions such as school</span>
+<span class="sd">        or workplace closures.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            list_of_layers (list[str]): Names of layers to close, matched</span>
+<span class="sd">                against ``self.layer_name``.</span>
+<span class="sd">            coefs (list[float], optional): Per-layer replacement weights.</span>
+<span class="sd">                When provided, ``coefs[idx]`` is used instead of ``0`` for</span>
+<span class="sd">                the layer at position ``idx`` in ``list_of_layers``.  When</span>
+<span class="sd">                ``None`` all listed layers are set to weight ``0``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Closing </span><span class="si">{</span><span class="n">list_of_layers</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">list_of_layers</span><span class="p">):</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_name</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">coefs</span> <span class="k">else</span> <span class="n">coefs</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LightGraph.copy">
+<a class="viewcode-back" href="../src_modules.html#light.LightGraph.copy">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return an optimised partial copy of the graph for a new simulation run.</span>
+
+<span class="sd">        The vast majority of graph fields (topology, node attributes, edge</span>
+<span class="sd">        metadata) are immutable between runs and are therefore shared via a</span>
+<span class="sd">        shallow copy.  Only the mutable, run-specific arrays—``e_valid``,</span>
+<span class="sd">        ``layer_weights``, ``e_active`` and ``e_layer_weight``—are deep-</span>
+<span class="sd">        copied and reset to their default values.  The quarantine tracker</span>
+<span class="sd">        ``is_quarantined`` is reset to ``None``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            LightGraph: A new ``LightGraph`` instance that shares topology</span>
+<span class="sd">            with the original but has independent mutable state.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">heavy_fields</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;e_valid&#39;</span><span class="p">,</span> <span class="s1">&#39;layer_weights&#39;</span><span class="p">,</span>
+                        <span class="s1">&#39;e_active&#39;</span><span class="p">,</span> <span class="s1">&#39;e_layer_weight&#39;</span><span class="p">]</span>
+        <span class="n">new</span> <span class="o">=</span> <span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">heavy_fields</span><span class="p">:</span>
+            <span class="n">field</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="n">new</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">field</span><span class="o">.</span><span class="n">copy</span><span class="p">())</span>
+        <span class="n">new</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">new</span><span class="o">.</span><span class="n">e_valid</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+        <span class="n">new</span><span class="o">.</span><span class="n">e_active</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">new</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

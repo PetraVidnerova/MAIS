@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>quarantine_coefs &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>quarantine_coefs</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for quarantine_coefs</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Quarantine and risk coefficients for the MAIS epidemic simulation.</span>
+
+<span class="sd">This module defines default quarantine coefficients (``QUARANTINE_COEFS``)</span>
+<span class="sd">and a collection of per-layer riskiness arrays (``RISK_FOR_LAYERS_*``)</span>
+<span class="sd">that govern how strongly each contact layer contributes to transmission</span>
+<span class="sd">during various intervention scenarios.</span>
+
+<span class="sd">The coefficients are keyed by layer index.  Each layer corresponds to a</span>
+<span class="sd">specific type of social contact (family, school, work, leisure, etc.).</span>
+<span class="sd">Quarantine coefficients are preferably provided via the graph object;</span>
+<span class="sd">the values defined here serve as defaults.</span>
+
+<span class="sd">Module-level constants:</span>
+<span class="sd">    QUARANTINE_COEFS (dict): Default quarantine multipliers per layer</span>
+<span class="sd">        (0 = fully suppressed, 1 = no change).</span>
+<span class="sd">    RISK_FOR_LAYERS (numpy.ndarray): Default riskiness array (80 %</span>
+<span class="sd">        for school/work, lower for leisure).</span>
+<span class="sd">    RISK_FOR_LAYERS_60 (numpy.ndarray): 60 % riskiness variant.</span>
+<span class="sd">    RISK_FOR_LAYERS_10 (numpy.ndarray): 10 % riskiness variant.</span>
+<span class="sd">    RISK_FOR_LAYERS_30 (numpy.ndarray): 30 % riskiness variant.</span>
+<span class="sd">    RISK_FOR_LAYERS_MINI (numpy.ndarray): Minimal riskiness (family only).</span>
+<span class="sd">    RISK_FOR_LAYERS_MAX (numpy.ndarray): Maximum riskiness (all layers = 1).</span>
+<span class="sd">    LAYER_GROUPS (dict): Mapping from group name to list of layer indices.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span>  <span class="nn">np</span>
+
+<span class="n">QUARANTINE_COEFS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">}</span>   
+
+
+<div class="viewcode-block" id="dict2risk">
+<a class="viewcode-back" href="../src_modules.html#quarantine_coefs.dict2risk">[docs]</a>
+<span class="k">def</span> <span class="nf">dict2risk</span><span class="p">(</span><span class="n">rdict</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert a layer-index-to-risk dictionary to a fixed-length numpy array.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        rdict (dict): Mapping from integer layer index to risk value</span>
+<span class="sd">            (float in [0, 1]).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Array of length 36 (dtype float) where position</span>
+<span class="sd">        ``i`` holds the risk value for layer ``i``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">36</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">rdict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">pass</span> 
+        <span class="c1">##ret[key] = value</span>
+    <span class="k">return</span> <span class="n">ret</span></div>
+
+
+<span class="c1">#RISK_FOR_LAYERS = None</span>
+<span class="n">RISK_FOR_LAYERS</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">0.4</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">0.5</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">0.8</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>
+
+<span class="c1">#RISK_FOR_LAYERS_60 = None </span>
+<span class="n">RISK_FOR_LAYERS_60</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>
+
+<span class="c1">#RISK_FOR_LAYERS_10 = None </span>
+<span class="n">RISK_FOR_LAYERS_10</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>    <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>    <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>
+
+<span class="c1">#RISK_FOR_LAYERS_30 = None</span>
+<span class="n">RISK_FOR_LAYERS_30</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">0.15</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">0.15</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">0.15</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">0.3</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>
+
+<span class="c1">#RISK_FOR_LAYERS_MINI = None</span>
+<span class="n">RISK_FOR_LAYERS_MINI</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>  <span class="mi">1</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>  <span class="mi">0</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">30</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mi">0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>  
+
+<span class="c1">#RISK_FOR_LAYERS_MAX = None</span>
+<span class="n">RISK_FOR_LAYERS_MAX</span> <span class="o">=</span> <span class="n">dict2risk</span><span class="p">({</span>
+    <span class="mi">0</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># family_inside</span>
+    <span class="mi">1</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># family_in_house</span>
+    <span class="mi">2</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># family_visitsors_to_visited</span>
+    <span class="mi">3</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># nursary_children_inclass</span>
+    <span class="mi">4</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># nursary_teachers_to_children</span>
+    <span class="mi">5</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># lower_elementary_children_inclass</span>
+    <span class="mi">6</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># lower_elementary_teachers_to_children</span>
+    <span class="mi">7</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># higher_elementary_children_inclass</span>
+    <span class="mi">8</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># higher_elementary_teachers_to_children</span>
+    <span class="mi">9</span><span class="p">:</span>  <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># highschool_children_inclass</span>
+    <span class="mi">10</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># highschool_teachers_to_children</span>
+    <span class="mi">11</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># nursary_children_coridors</span>
+    <span class="mi">12</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># elementary_children_coridors</span>
+    <span class="mi">13</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># highschool_children_coridors</span>
+    <span class="mi">14</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># nursary_teachers</span>
+    <span class="mi">15</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># elementary_teachers</span>
+    <span class="mi">16</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># highschool_teachers</span>
+    <span class="mi">17</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># leasure_outdoor</span>
+    <span class="mi">18</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># leasure_visit</span>
+    <span class="mi">19</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># leasure_pub</span>
+    <span class="mi">20</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># work_contacts</span>
+    <span class="mi">21</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_distant</span>
+    <span class="mi">22</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_plysical_short</span>
+    <span class="mi">23</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># work_workers_to_clients_physical_long</span>
+    <span class="mi">24</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># public_transport</span>
+    <span class="mi">25</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># shops_customers</span>
+    <span class="mi">26</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># shops_workers_to_clients</span>
+    <span class="mi">27</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># pubs_customers</span>
+    <span class="mi">28</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># pubs_workers_to_clients</span>
+    <span class="mi">29</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  
+    <span class="mi">30</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">31</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">32</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>  <span class="c1"># superspreader</span>
+    <span class="mi">33</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span> <span class="c1"># superspreader</span>
+    <span class="mi">34</span><span class="p">:</span> <span class="mf">1.0</span>  <span class="c1"># superspreader</span>
+<span class="p">})</span>  
+
+<span class="n">LAYER_GROUPS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;family&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span>
+    <span class="s2">&quot;school_work&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">17</span><span class="p">))</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span><span class="mi">24</span><span class="p">)),</span>
+    <span class="s2">&quot;leasure&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">17</span><span class="p">,</span> <span class="mi">18</span><span class="p">,</span> <span class="mi">19</span><span class="p">],</span>
+    <span class="s2">&quot;rest&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">24</span><span class="p">,</span> <span class="mi">35</span><span class="p">))</span>
+<span class="p">}</span>
+
+<div class="viewcode-block" id="get_riskiness">
+<a class="viewcode-back" href="../src_modules.html#quarantine_coefs.get_riskiness">[docs]</a>
+<span class="k">def</span> <span class="nf">get_riskiness</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">family</span><span class="p">,</span> <span class="n">work</span><span class="p">,</span> <span class="n">leasure</span><span class="p">,</span> <span class="n">rest</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Build a per-layer riskiness array from group-level risk values.</span>
+
+<span class="sd">    The function maps scalar risk values onto their respective layer</span>
+<span class="sd">    groups (family, school/work, leisure, rest) using the group</span>
+<span class="sd">    definitions stored on the graph or, if absent, the module-level</span>
+<span class="sd">    ``LAYER_GROUPS`` default.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.  Must expose</span>
+<span class="sd">            ``layer_name`` (sequence) and optionally ``LAYER_GROUPS``</span>
+<span class="sd">            (dict mapping group names to layer index lists).</span>
+<span class="sd">        family (float): Risk multiplier for family-contact layers</span>
+<span class="sd">            (value in [0, 1]).</span>
+<span class="sd">        work (float): Risk multiplier for school/work layers.</span>
+<span class="sd">        leasure (float): Risk multiplier for leisure layers.</span>
+<span class="sd">        rest (float): Risk multiplier for all remaining layers.</span>
+<span class="sd">            Defaults to 0.0.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Array of length ``len(graph.layer_name)`` with</span>
+<span class="sd">        per-layer risk values assigned according to the group mapping.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_name</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">graph</span><span class="o">.</span><span class="n">LAYER_GROUPS</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">lg</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">LAYER_GROUPS</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">lg</span> <span class="o">=</span> <span class="n">LAYER_GROUPS</span>
+        
+    <span class="n">ret</span><span class="p">[</span><span class="n">lg</span><span class="p">[</span><span class="s2">&quot;family&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">family</span> 
+    <span class="n">ret</span><span class="p">[</span><span class="n">lg</span><span class="p">[</span><span class="s2">&quot;school_work&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">work</span>
+    <span class="n">ret</span><span class="p">[</span><span class="n">lg</span><span class="p">[</span><span class="s2">&quot;leasure&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">leasure</span> 
+    <span class="n">ret</span><span class="p">[</span><span class="n">lg</span><span class="p">[</span><span class="s2">&quot;rest&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">rest</span> 
+
+    <span class="c1"># ret = { 0: 0.0 }</span>
+    <span class="c1"># ret.update({</span>
+    <span class="c1">#     key: family</span>
+    <span class="c1">#     for key in [1, 2, 3]</span>
+    <span class="c1"># })</span>
+    <span class="c1"># ret.update({</span>
+    <span class="c1">#     key: work</span>
+    <span class="c1">#     for key in range(4, 18)</span>
+    <span class="c1"># })</span>
+    <span class="c1"># ret.update({</span>
+    <span class="c1">#     key: work</span>
+    <span class="c1">#     for key in range(21, 25)</span>
+    <span class="c1"># })</span>
+    <span class="c1"># ret.update({</span>
+    <span class="c1">#     key: leasure</span>
+    <span class="c1">#     for key in [18,19,20]</span>
+    <span class="c1"># })</span>
+    <span class="c1"># ret.update({</span>
+    <span class="c1">#     key: rest</span>
+    <span class="c1">#     for key in range(25,36)</span>
+    <span class="c1"># })</span>
+    <span class="k">return</span> <span class="n">ret</span> </div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

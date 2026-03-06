@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vaccination &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>vaccination</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for vaccination</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Vaccination policies for the MAIS epidemic simulation.</span>
+
+<span class="sd">This module provides several vaccination policy classes that vaccinate</span>
+<span class="sd">elderly and worker sub-populations according to a configurable calendar.</span>
+<span class="sd">Different subclasses implement distinct mechanisms by which vaccination</span>
+<span class="sd">reduces infection risk:</span>
+
+<span class="sd">* :class:`Vaccination` – on first exposure (entering state E) a</span>
+<span class="sd">  vaccinated node may be redirected back to susceptible.</span>
+<span class="sd">* :class:`VaccinationToR` – vaccinated nodes in S are moved directly</span>
+<span class="sd">  to R (recovered/immune).</span>
+<span class="sd">* :class:`VaccinationToA` – vaccination increases the asymptomatic</span>
+<span class="sd">  rate.</span>
+<span class="sd">* :class:`VaccinationToSA` – combines the ``ToS`` and ``ToA``</span>
+<span class="sd">  mechanisms.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">policies.policy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.agent_based_network_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span>
+
+<span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span><span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">DEBUG</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_process_calendar</span><span class="p">(</span><span class="n">filename</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a vaccination calendar CSV and return per-group daily counts.</span>
+
+<span class="sd">    The CSV must have columns ``T`` (simulation day), ``workers``</span>
+<span class="sd">    (number of workers to vaccinate), and ``elderly`` (number of</span>
+<span class="sd">    elderly individuals to vaccinate).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the CSV vaccination calendar file.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple[dict, dict]: A pair ``(workers_calendar, elderly_calendar)``</span>
+<span class="sd">        where each is a ``{day: count}`` dictionary.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">],</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;workers&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">))),</span>
+        <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">],</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;elderly&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">))),</span>
+    <span class="p">)</span>
+
+
+<div class="viewcode-block" id="Vaccination">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Vaccination</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Vaccination policy that reduces susceptibility upon exposure.</span>
+
+<span class="sd">    When a vaccinated node first enters state ``E`` (exposed), there is</span>
+<span class="sd">    a probability (dependent on days since vaccination and whether a</span>
+<span class="sd">    first or second dose has been given) that the node is returned to</span>
+<span class="sd">    the susceptible state instead of progressing towards illness.</span>
+
+<span class="sd">    Vaccination is administered daily according to separate calendars</span>
+<span class="sd">    for elderly and worker sub-populations.  The number of days since</span>
+<span class="sd">    vaccination is tracked per node.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.  Must expose</span>
+<span class="sd">            ``num_nodes``, ``nodes_age``, ``nodes_ecactivity``, and</span>
+<span class="sd">            ``cat_table``.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str): Path to an INI-style configuration file.</span>
+<span class="sd">            **Required.**  The file must include:</span>
+
+<span class="sd">            * ``[CALENDAR]`` section with ``calendar_filename`` (path</span>
+<span class="sd">              to a vaccination calendar CSV) and optionally ``delay``</span>
+<span class="sd">              (days between first and second dose).</span>
+<span class="sd">            * ``[EFFECT]`` section with ``first_shot`` and</span>
+<span class="sd">              ``second_shot`` effectiveness coefficients.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        str: If ``config_file`` is ``None`` or the calendar filename</span>
+<span class="sd">            is missing (raises a string literal – legacy behaviour).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="Vaccination.__init__">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.__init__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the vaccination policy from a configuration file.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str): Path to the required configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># -1 .. not vaccinated</span>
+        <span class="c1"># &gt;= 0 days from vaccination</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_in_E</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span>  <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>  <span class="c1"># auxiliary var</span>
+
+        <span class="c1"># statistics</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_moved_to_R</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">401</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">config_file</span><span class="p">:</span>
+            <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+            <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+            <span class="n">calendar_filename</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+                <span class="s2">&quot;CALENDAR&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;calendar_filename&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">calendar_filename</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="s2">&quot;Missing calendar filename in vaccination policy config file.&quot;</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">workers_calendar</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">elderly_calendar</span> <span class="o">=</span> <span class="n">_process_calendar</span><span class="p">(</span>
+                <span class="n">calendar_filename</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;CALENDAR&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;delay&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">first_shot_coef</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;EFFECT&quot;</span><span class="p">)[</span><span class="s2">&quot;first_shot&quot;</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">second_shot_coef</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;EFFECT&quot;</span><span class="p">)[</span><span class="s2">&quot;second_shot&quot;</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="s2">&quot;Vaccination policy requires config file.&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">old_to_vaccinate</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_age</span><span class="p">))</span>
+        <span class="c1"># self.index_to_go = len(self.sort_indicies)-1</span>
+
+        <span class="n">worker_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">cat_table</span><span class="p">[</span><span class="s2">&quot;ecactivity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s2">&quot;working&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_ecactivity</span> <span class="o">==</span> <span class="n">worker_id</span><span class="p">])</span></div>
+
+        <span class="c1"># print(self.workers_to_vaccinate)</span>
+        <span class="c1"># exit()</span>
+
+<div class="viewcode-block" id="Vaccination.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.first_day_setup">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform first-day setup (no-op for this policy).&quot;&quot;&quot;</span>
+        <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.stop">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.stop">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop vaccinating new nodes.</span>
+
+<span class="sd">        After calling ``stop``, nodes already being tracked continue to</span>
+<span class="sd">        have their vaccination days incremented, but no new vaccinations</span>
+<span class="sd">        are administered.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.move_to_S">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.move_to_S">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">move_to_S</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Redirect newly exposed vaccinated nodes back to the susceptible state.</span>
+
+<span class="sd">        For each vaccinated node that has just entered state ``E`` for</span>
+<span class="sd">        the first time today, a random draw determines whether the</span>
+<span class="sd">        vaccine prevents progression.  The probability depends on</span>
+<span class="sd">        days-since-vaccination:</span>
+
+<span class="sd">        * 14 to (``delay`` + 6) days: ``first_shot_coef``.</span>
+<span class="sd">        * (``delay`` + 7) days or more: ``second_shot_coef``.</span>
+
+<span class="sd">        Nodes redirected to susceptible have their ``days_in_E`` counter</span>
+<span class="sd">        reset.  The count of redirected nodes is recorded in</span>
+<span class="sd">        ``stat_moved_to_R``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># take those who are first day E (are E AND are E the first day)</span>
+        <span class="n">nodes_first_E</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_in_E</span><span class="p">[</span><span class="n">nodes_first_E</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">nodes_first_E</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="n">nodes_first_E</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">days_in_E</span> <span class="o">==</span> <span class="mi">1</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">nodes_first_E</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># By 14 days after the first shot, the effect is zero (i.e.  an</span>
+        <span class="c1"># infectedindividual becomes exposed and later symptomatic or asymptomaticas if</span>
+        <span class="c1"># not vaccinated)•Between 14 and 20 days after the first shot, those, who are</span>
+        <span class="c1"># infected(heading to theEcompartment) and are &quot;intended&quot; to be</span>
+        <span class="c1"># asymptomatic(further go toIa, it is no harm to assume this decision is made</span>
+        <span class="c1"># inforward) become recovered with probability0.29instead of</span>
+        <span class="c1"># enteringtheEcompartment. Those, intended to be symptomatic (further gotoIp)</span>
+        <span class="c1"># become recovered with0.46probability.•21days or more after first shot, this</span>
+        <span class="c1"># probability of &quot;recovery&quot; is0.52for asymptomatic and0.6for symptomatic.•7days</span>
+        <span class="c1"># after the second shot or later, the probability of &quot;recovery&quot; is0.9for</span>
+        <span class="c1"># asymptomatic and0.92for symptomatic</span>
+
+        <span class="c1"># divide nodes_first_E to asymptomatic candidates and symptomatic candidates</span>
+        <span class="c1"># assert np.all(np.logical_or(</span>
+        <span class="c1">#     self.model.state_to_go[nodes_first_E, 0] == STATES.I_n,</span>
+        <span class="c1">#     self.model.state_to_go[nodes_first_E, 0] == STATES.I_a</span>
+        <span class="c1"># )), &quot;inconsistent state_to_go&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">decide_move_to_R</span><span class="p">(</span><span class="n">selected</span><span class="p">,</span> <span class="n">prob</span><span class="p">):</span>
+            <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">selected</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;generating </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2"> randoms&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">n</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">[</span><span class="n">selected</span><span class="p">]</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="n">prob</span>
+
+        <span class="c1"># 14 - 20 days: 0.29 for A, 0.46 for S</span>
+        <span class="c1"># skip those with &lt; 14 days</span>
+
+        <span class="c1"># for state, probs in (</span>
+        <span class="c1">#         (STATES.I_n, [0.29, 0.52, 0.9]),</span>
+        <span class="c1">#         (STATES.I_a, [0.46, 0.6, 0.92])</span>
+        <span class="c1"># ):</span>
+        <span class="c1">#     nodes_heading_to_state = nodes_first_E.copy()</span>
+        <span class="c1">#     nodes_heading_to_state[nodes_first_E] = self.model.state_to_go[nodes_first_E, 0] == state</span>
+        <span class="c1">#     node_list = self.nodes[nodes_heading_to_state]</span>
+
+        <span class="c1">#     if not(len(node_list) &gt; 0):</span>
+        <span class="c1">#         continue</span>
+        <span class="c1">#     # skip those who are in first 14 days</span>
+        <span class="c1">#     node_list = node_list[self.vaccinated[node_list] &gt;= 14]</span>
+        <span class="c1">#     # select 14 - 21</span>
+        <span class="c1">#     selected = node_list[self.vaccinated[node_list] &lt; 21]</span>
+        <span class="c1">#     decide_move_to_R(selected, probs[0])</span>
+        <span class="c1">#     # skip them</span>
+        <span class="c1">#     node_list = node_list[self.vaccinated[node_list] &gt;= 21]</span>
+        <span class="c1">#     # selecte &lt; second shot + 7</span>
+        <span class="c1">#     selected = node_list[self.vaccinated[node_list] &lt; self.delay + 7]</span>
+        <span class="c1">#     decide_move_to_R(selected, probs[1])</span>
+        <span class="c1">#     # skip them</span>
+        <span class="c1">#     node_list = node_list[self.vaccinated[node_list] &gt;= self.delay + 7]</span>
+        <span class="c1">#     decide_move_to_R(node_list, probs[2])</span>
+
+        <span class="c1"># first shots</span>
+
+        <span class="n">node_list</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="n">nodes_first_E</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="ow">not</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">node_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="k">return</span>
+
+        <span class="c1"># those who have only the first shot</span>
+        <span class="n">first_shotters</span> <span class="o">=</span> <span class="n">node_list</span><span class="p">[</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">node_list</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">14</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">node_list</span><span class="p">]</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">+</span> <span class="mi">7</span>
+            <span class="p">)]</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">first_shotters</span><span class="p">))</span>
+        <span class="n">go_back</span> <span class="o">=</span> <span class="n">first_shotters</span><span class="p">[</span><span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_shot_coef</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">[</span><span class="n">go_back</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="n">second_shotters</span> <span class="o">=</span> <span class="n">node_list</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">node_list</span><span class="p">]</span>
+                                    <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">+</span> <span class="mi">7</span><span class="p">]</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">second_shotters</span><span class="p">))</span>
+        <span class="n">go_back</span> <span class="o">=</span> <span class="n">second_shotters</span><span class="p">[</span><span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">second_shot_coef</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">[</span><span class="n">go_back</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_moved_to_R</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">move_target_nodes_to_S</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_in_E</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.process_vaccinated">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.process_vaccinated">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_vaccinated</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply the vaccination effect to currently vaccinated nodes.</span>
+
+<span class="sd">        Calls :meth:`move_to_S` to handle newly exposed vaccinated</span>
+<span class="sd">        nodes.  Subclasses override this method to implement alternative</span>
+<span class="sd">        vaccination mechanisms.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">move_to_S</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.run">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.run">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the vaccination policy.</span>
+
+<span class="sd">        Increments vaccination-day counters, applies the vaccination</span>
+<span class="sd">        effect, and administers new vaccinations according to the</span>
+<span class="sd">        daily calendar.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+
+        <span class="c1"># update vaccinated days</span>
+        <span class="n">already_vaccinated</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">already_vaccinated</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">process_vaccinated</span><span class="p">()</span>
+
+        <span class="c1"># update asymptotic rates  - OBSOLETE</span>
+        <span class="c1"># Počítám, že první týden nemá vakcíná</span>
+        <span class="c1"># žádnou účinnost, po týdnu 50%, po dvou týdnech 70%, po druhé</span>
+        <span class="c1"># dávce 90% a po dalším týdnu 95%</span>
+
+        <span class="c1"># older = self.graph.nodes_age &gt; 65</span>
+        <span class="c1"># younger = np.logical_not(older)</span>
+
+        <span class="c1"># # update two weeks after first vaccination</span>
+        <span class="c1"># selected = self.vaccinated == 14</span>
+        <span class="c1"># self.model.asymptomatic_rate[np.logical_and(selected, older)] = 0.7</span>
+        <span class="c1"># self.model.asymptomatic_rate[np.logical_and(selected, younger)] = 0.9</span>
+
+        <span class="c1"># # update two weeks after second vaccination</span>
+        <span class="c1"># selected = self.vaccinated == self.delay + 14</span>
+        <span class="c1"># self.model.asymptomatic_rate[np.logical_and(selected, older)] = 0.8</span>
+        <span class="c1"># self.model.asymptomatic_rate[np.logical_and(selected, younger)] = 0.95</span>
+
+        <span class="c1"># selected = self.vaccinated == 7</span>
+        <span class="c1"># self.model.asymptomatic_rate[selected] = 0.5</span>
+        <span class="c1"># selected = self.vaccinated == 14</span>
+        <span class="c1"># self.model.asymptomatic_rate[selected] = 0.7</span>
+        <span class="c1"># selected = self.vaccinated == self.delay</span>
+        <span class="c1"># self.model.asymptomatic_rate[selected] = 0.9</span>
+        <span class="c1"># selected = self.vaccinated == self.delay + 7</span>
+        <span class="c1"># self.model.asymptomatic_rate[selected] = 0.95</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;asymptomatic rate </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">elderly_calendar</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">vaccinate_old</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">elderly_calendar</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers_calendar</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">vaccinate_workers</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">workers_calendar</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="p">])</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.vaccinate_old">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.vaccinate_old">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">vaccinate_old</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Vaccinate up to ``num`` elderly nodes (sorted by descending age).</span>
+
+<span class="sd">        Nodes that are already vaccinated, currently detected as active</span>
+<span class="sd">        cases, or dead are skipped.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            num (int): Maximum number of elderly nodes to vaccinate today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">num</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;T=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="si">}</span><span class="s2"> Vaccinating </span><span class="si">{</span><span class="n">num</span><span class="si">}</span><span class="s2"> elderly.&quot;</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">old_to_vaccinate</span><span class="p">)</span>
+        <span class="k">while</span> <span class="n">num</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">index</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="n">who</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">old_to_vaccinate</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">who</span><span class="p">]</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span><span class="p">[</span><span class="n">who</span><span class="p">]:</span>  <span class="c1"># change to active case</span>
+                <span class="k">continue</span>
+            <span class="c1"># dead are not vaccinated</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">D</span><span class="p">,</span> <span class="n">who</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">who</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">old_to_vaccinate</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+            <span class="n">num</span> <span class="o">-=</span> <span class="mi">1</span></div>
+
+
+<div class="viewcode-block" id="Vaccination.vaccinate_workers">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.vaccinate_workers">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">vaccinate_workers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Vaccinate up to ``num`` worker nodes chosen at random.</span>
+
+<span class="sd">        Nodes that are currently detected as active cases or dead are</span>
+<span class="sd">        excluded from selection.  If fewer eligible workers than ``num``</span>
+<span class="sd">        exist, all eligible workers are vaccinated.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            num (int): Target number of workers to vaccinate today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">num</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;T=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="si">}</span><span class="s2"> Vaccinating </span><span class="si">{</span><span class="n">num</span><span class="si">}</span><span class="s2"> workers.&quot;</span><span class="p">)</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">num_workers</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># ids_to_vaccinate = self.workers_to_vaccinate[self.model.node_detected[self.workers_to_vaccinate] == False]</span>
+        <span class="c1"># if len(ids_to_vaccinate) == 0:</span>
+        <span class="c1">#     logging.warning(&quot;No more workers to vaccinate.&quot;)</span>
+        <span class="c1">#     exit()</span>
+        <span class="c1">#     return</span>
+        <span class="c1"># ids_to_vaccinate = ids_to_vaccinate[self.model.memberships[STATES.D, ids_to_vaccinate, 0] != 1]</span>
+
+        <span class="n">ids_to_vaccinate</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span><span class="p">]</span> <span class="o">==</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">D</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">ids_to_vaccinate</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">num</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Not enough workers to vaccinate.&quot;</span><span class="p">)</span>
+            <span class="n">num</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ids_to_vaccinate</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">num</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">return</span>
+        <span class="n">selected_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span>
+            <span class="n">ids_to_vaccinate</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">num</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="n">selected_ids</span><span class="p">:</span>
+            <span class="n">who</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">who</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">selected_ids</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers_to_vaccinate</span><span class="p">[</span><span class="n">index</span><span class="p">]</span></div>
+
+
+        <span class="c1"># # get all nodes that are S or Ss and were not vaccinated</span>
+        <span class="c1"># target_nodes = np.logical_not(</span>
+        <span class="c1">#     self.model.node_detected</span>
+        <span class="c1"># )</span>
+        <span class="c1"># target_nodes = np.logical_and(</span>
+        <span class="c1">#     target_nodes[:,0],</span>
+        <span class="c1">#     self.vaccinated == False</span>
+        <span class="c1"># )</span>
+        <span class="c1"># print(target_nodes.shape)</span>
+        <span class="c1"># pool = self.nodes[target_nodes]</span>
+
+        <span class="c1"># # select X of them to be vaccinated</span>
+        <span class="c1"># to_vaccinate = np.random.choice(pool, size=self.num_to_vaccinate, replace=False)</span>
+        <span class="c1"># self.vaccinated[to_vaccinate] = True</span>
+        <span class="c1"># self.model.asymptomatic_rate[to_vaccinate] = 0.9</span>
+
+        <span class="c1"># #        self.model.move_to_R(to_vaccinate)</span>
+
+<div class="viewcode-block" id="Vaccination.to_df">
+<a class="viewcode-back" href="../src_modules.html#vaccination.Vaccination.to_df">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame with daily vaccination statistics.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: DataFrame indexed by time ``T`` with</span>
+<span class="sd">            column ``moved_to_R`` (nodes redirected to susceptible/</span>
+<span class="sd">            recovered each day) and ``day``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">start_day</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">+</span>
+                      <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">start_day</span><span class="p">)</span>  <span class="c1"># -1 + 1</span>
+        <span class="n">policy_name</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="sa">f</span><span class="s2">&quot;moved_to_R&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_moved_to_R</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+        <span class="p">}</span>
+        <span class="n">columns</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="VaccinationToR">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToR">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">VaccinationToR</span><span class="p">(</span><span class="n">Vaccination</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Vaccination policy that moves susceptible nodes directly to recovered.</span>
+
+<span class="sd">    On day 14 after the first shot, susceptible vaccinated nodes are</span>
+<span class="sd">    moved to R with probability ``first_shot_coef``.  On day</span>
+<span class="sd">    ``delay + 7`` after the first shot, a further fraction</span>
+<span class="sd">    ``(second_shot_coef - first_shot_coef)`` is moved to R.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str): Path to the required configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="VaccinationToR.process_vaccinated">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToR.process_vaccinated">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_vaccinated</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Move eligible susceptible vaccinated nodes to recovered state.</span>
+
+<span class="sd">        Applies first-shot and second-shot effects by drawing random</span>
+<span class="sd">        numbers and calling ``model.move_target_nodes_to_R``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># # update two weeks after first vaccination</span>
+        <span class="n">nodes_in_S</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="p">:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+
+        <span class="n">selected</span> <span class="o">=</span> <span class="n">nodes_in_S</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">nodes_in_S</span><span class="p">]</span> <span class="o">==</span> <span class="mi">14</span><span class="p">]</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">selected</span><span class="p">))</span>
+        <span class="n">to_R</span> <span class="o">=</span> <span class="n">selected</span><span class="p">[</span><span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_shot_coef</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">[</span><span class="n">to_R</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="n">selected</span> <span class="o">=</span> <span class="n">nodes_in_S</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span><span class="p">[</span><span class="n">nodes_in_S</span><span class="p">]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">+</span> <span class="mi">7</span><span class="p">]</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">selected</span><span class="p">))</span>
+        <span class="n">to_R</span> <span class="o">=</span> <span class="n">selected</span><span class="p">[</span><span class="n">r</span> <span class="o">&lt;</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">second_shot_coef</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_shot_coef</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">[</span><span class="n">to_R</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_moved_to_R</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">move_target_nodes_to_R</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_in_E</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">target_for_R</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="VaccinationToA">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToA">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">VaccinationToA</span><span class="p">(</span><span class="n">Vaccination</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Vaccination policy that increases the asymptomatic rate of vaccinated nodes.</span>
+
+<span class="sd">    Fourteen days after the first shot the asymptomatic rate is</span>
+<span class="sd">    updated to reflect first-dose effectiveness.  A further update</span>
+<span class="sd">    occurs at ``delay + 7`` days to reflect second-dose effectiveness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str): Path to the required configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="VaccinationToA.update_asymptomatic_rates">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToA.update_asymptomatic_rates">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_asymptomatic_rates</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update ``model.asymptomatic_rate`` for nodes at key vaccination milestones.</span>
+
+<span class="sd">        First-shot effect is applied at day 14; second-shot effect at</span>
+<span class="sd">        day ``self.delay + 7``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># # update two weeks after first vaccination</span>
+        <span class="n">selected</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span> <span class="o">==</span> <span class="mi">14</span><span class="p">]</span>
+        <span class="n">srate</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="mf">0.179</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span><span class="p">[</span><span class="n">selected</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> \
+            <span class="n">srate</span><span class="o">*</span><span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">first_shot_coef</span><span class="p">)</span>
+
+        <span class="n">selected</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">vaccinated</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">+</span> <span class="mi">7</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span><span class="p">[</span><span class="n">selected</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> \
+            <span class="n">srate</span><span class="o">*</span><span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">second_shot_coef</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="VaccinationToA.process_vaccinated">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToA.process_vaccinated">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_vaccinated</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply vaccination effect by updating asymptomatic rates.&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_asymptomatic_rates</span><span class="p">()</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="VaccinationToSA">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToSA">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">VaccinationToSA</span><span class="p">(</span><span class="n">VaccinationToA</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Vaccination policy combining susceptible redirection and asymptomatic-rate update.</span>
+
+<span class="sd">    Applies both the :meth:`Vaccination.move_to_S` mechanism (redirecting</span>
+<span class="sd">    newly exposed vaccinated nodes back to susceptible) and the</span>
+<span class="sd">    :meth:`VaccinationToA.update_asymptomatic_rates` mechanism each</span>
+<span class="sd">    time-step.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str): Path to the required configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="VaccinationToSA.process_vaccinated">
+<a class="viewcode-back" href="../src_modules.html#vaccination.VaccinationToSA.process_vaccinated">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_vaccinated</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply both susceptible-redirection and asymptomatic-rate-update effects.&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">move_to_S</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_asymptomatic_rates</span><span class="p">()</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>school_policy &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>school_policy</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for school_policy</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;School epidemic-intervention policies for the MAIS simulation.</span>
+
+<span class="sd">This module provides policies designed for school-specific contact</span>
+<span class="sd">network graphs.  They manage week/weekend school-opening schedules,</span>
+<span class="sd">optional rapid antigen testing, and class-level quarantine.</span>
+
+<span class="sd">.. warning::</span>
+<span class="sd">    These policies are intended to be run with a **special school</span>
+<span class="sd">    graph** only.  Do not use them with general population graphs</span>
+<span class="sd">    (e.g. hodoninsko, lounsko, papertown).</span>
+
+<span class="sd">Classes:</span>
+<span class="sd">    BasicSchoolPolicy: Manages school open/weekend toggle and optional</span>
+<span class="sd">    student testing.</span>
+<span class="sd">    ClosePartPolicy: Extends :class:`BasicSchoolPolicy` with the</span>
+<span class="sd">    ability to close individual classes.</span>
+<span class="sd">    AlternatingPolicy: Alternates two groups of classes each week.</span>
+<span class="sd">    AlternateFreeMonday: Alternating policy with Monday as a free day.</span>
+<span class="sd">    AlternateAndMondayPCR: Alternating policy with Monday PCR testing.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="c1"># NOTE: this policy is intended to be run with a special graph for schools!!!!</span>
+<span class="c1"># Do not use it for normal graphs (hodoninsko, lounsko, papertown, etc).</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cfgs</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">depo</span><span class="w"> </span><span class="kn">import</span> <span class="n">Depo</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">policies.policy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.agent_based_network_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.graph_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">compute_mean_degree</span>
+
+<span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span><span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">DEBUG</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">BasicSchoolPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Policy that manages school-day / weekend toggling and optional testing.</span>
+
+<span class="sd">    On weekdays the school graph layers are active; on weekends all</span>
+<span class="sd">    layers are switched off.  For the first 35 simulation steps all</span>
+<span class="sd">    layers are also suppressed (warm-up period).  Optionally performs</span>
+<span class="sd">    rapid antigen testing on configurable weekdays and places positive</span>
+<span class="sd">    nodes into quarantine.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The school contact network graph object.  Must expose</span>
+<span class="sd">            ``num_nodes``, ``nodes_age``, ``layer_weights``,</span>
+<span class="sd">            ``number_of_nodes``, ``QUARANTINE_COEFS``, ``nodes``,</span>
+<span class="sd">            ``is_quarantined``, and ``nodes_class``.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to an INI-style configuration</span>
+<span class="sd">            file.  The ``[TESTING]`` section may contain:</span>
+
+<span class="sd">            * ``testing`` – ``&quot;Yes&quot;`` to enable testing (default</span>
+<span class="sd">              ``&quot;No&quot;``).</span>
+<span class="sd">            * ``sensitivity`` – test sensitivity in [0, 1] (default</span>
+<span class="sd">              0.4).</span>
+<span class="sd">            * ``days`` – weekday index or list of indices on which</span>
+<span class="sd">              testing is performed (default ``(0, 2)``).</span>
+<span class="sd">        config_obj: Unused; reserved for future use.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="BasicSchoolPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.__init__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">config_obj</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the basic school policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The school contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">            config_obj: Reserved for future use.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_start</span> <span class="o">=</span> <span class="mi">5</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">testing</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_sensitivity</span> <span class="o">=</span> <span class="mf">0.4</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span> <span class="o">=</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="n">teachers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_age</span> <span class="o">&gt;=</span> <span class="mi">20</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">[</span><span class="n">teachers</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># do not test teachers</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">config_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+            <span class="n">test_sec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TESTING&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">test_sec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;testing&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">testing</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">if</span> <span class="s2">&quot;sensitivity&quot;</span> <span class="ow">in</span> <span class="n">test_sec</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_sensitivity</span> <span class="o">=</span> <span class="n">test_sec</span><span class="p">[</span><span class="s2">&quot;sensitivity&quot;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="s2">&quot;days&quot;</span> <span class="ow">in</span> <span class="n">test_sec</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span> <span class="o">=</span> <span class="n">test_sec</span><span class="p">[</span><span class="s2">&quot;days&quot;</span><span class="p">]</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_days</span><span class="p">)</span> <span class="ow">is</span> <span class="nb">list</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_days</span><span class="p">,)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;testing </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">testing</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;test sensitivity </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">test_sensitivity</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># all layers will be turned off for weekend</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mask_all_layers</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">i</span><span class="p">:</span> <span class="mi">0</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">))</span>
+        <span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">back_up_layers</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># todo .. let it be a part of a graph</span>
+        <span class="c1"># ZS:</span>
+        <span class="n">layers_apart_school</span> <span class="o">=</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">12</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">41</span><span class="p">,</span> <span class="mi">72</span><span class="p">))</span>
+        <span class="c1">#        layers_apart_school =  [2, 7, 11]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">x</span>
+            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">x</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">layers_apart_school</span>
+        <span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quara</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">301</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.nodes_to_quarantine">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.nodes_to_quarantine">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Remove nodes from school by switching off their school-layer edges.</span>
+
+<span class="sd">        Sets ``at_school[nodes]`` to ``False`` and turns off all edges</span>
+<span class="sd">        on school layers for those nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Indices of nodes to quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="s2">&quot;goes to the stay-at-home state.&quot;</span><span class="p">)</span>
+        <span class="n">edges_to_close</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes_edges_on_layers</span><span class="p">(</span>
+            <span class="n">nodes</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">switch_off_edges</span><span class="p">(</span><span class="n">edges_to_close</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.nodes_from_quarantine">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.nodes_from_quarantine">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return nodes to school by switching on their school-layer edges.</span>
+
+<span class="sd">        Sets ``at_school[nodes]`` to ``True`` and restores all edges on</span>
+<span class="sd">        school layers for those nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Indices of nodes to release from</span>
+<span class="sd">                quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="s2">&quot;goes to the go-to-school state.&quot;</span><span class="p">)</span>
+        <span class="n">edges_to_release</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes_edges_on_layers</span><span class="p">(</span>
+            <span class="n">nodes</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">switch_on_edges</span><span class="p">(</span><span class="n">edges_to_release</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.first_day_setup">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Suppress all layers for the warm-up period and initialise statistics.</span>
+
+<span class="sd">        Saves a copy of the initial layer weights, sets all layer</span>
+<span class="sd">        weights to zero (school closed during warm-up), and fills</span>
+<span class="sd">        ``stat_in_quara`` with zeros for days before the policy starts.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># # move teachers to R (just for one exp)</span>
+        <span class="c1"># teachers = self.graph.nodes[self.graph.nodes_age &gt;= 20]</span>
+        <span class="c1"># #self.model.move_to_R(teachers)</span>
+        <span class="c1"># self.nodes_to_quarantine(teachers)</span>
+
+        <span class="c1"># switch off all layers till day 35</span>
+        <span class="c1"># ! be careful about colision with layer calendar</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day_back_up</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask_all_layers</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quara</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.do_testing">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.do_testing">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">do_testing</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform antigen testing on configured weekdays and quarantine positives.</span>
+
+<span class="sd">        On test days, identifies students currently at school and</span>
+<span class="sd">        stochastically classifies them as positive (with probability</span>
+<span class="sd">        ``test_sensitivity``).  Positive nodes are quarantined for</span>
+<span class="sd">        7 days.  Released nodes whose quarantine has ended are restored</span>
+<span class="sd">        to school.  Updates ``stat_in_quara`` with the current</span>
+<span class="sd">        quarantine count.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">recover_edges_for_nodes</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">released</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;node released from quarantine.&quot;</span><span class="p">)</span>
+
+        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span>
+
+        <span class="c1"># monday or wednesday perform tests -&gt; do it the night before</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span><span class="p">:</span>
+
+            <span class="n">students_at_school</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">==</span> <span class="mi">0</span>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">should_not_be_tested</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">test_passive</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">should_not_be_tested</span><span class="p">:</span>
+                    <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                            <span class="s2">&quot;node should NOT be tested.&quot;</span><span class="p">)</span>
+
+                <span class="n">students_at_school</span><span class="p">[</span><span class="n">should_not_be_tested</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">students_at_school</span><span class="p">[</span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;node is at school and will be tested.&quot;</span><span class="p">)</span>
+
+            <span class="c1"># at school and positive</span>
+            <span class="n">possibly_positive</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">]</span> <span class="o">+</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">+</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">]</span> <span class="o">+</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">]</span> <span class="o">+</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">possibly_positive</span><span class="p">[</span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;node is positive.&quot;</span><span class="p">)</span>
+
+            <span class="n">possibly_positive_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+                <span class="n">students_at_school</span><span class="p">,</span>
+                <span class="n">possibly_positive</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">possibly_positive_test</span><span class="p">[</span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;node is positive and is tested.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+            <span class="n">num</span> <span class="o">=</span> <span class="n">possibly_positive_test</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+            <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span><span class="p">[</span><span class="n">possibly_positive_test</span><span class="p">]</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_sensitivity</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span><span class="p">[</span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;had positive tested.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">modify_layers_for_nodes</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">positive_test</span><span class="p">]),</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span><span class="p">[</span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="s2">&quot;is in quarantine.&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quara</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">num_of_prisoners</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.stop">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.stop">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop any new interventions.</span>
+
+<span class="sd">        After calling ``stop``, no new quarantines or school closures</span>
+<span class="sd">        are initiated.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.closing_and_opening">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.closing_and_opening">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Hook for subclasses to implement dynamic school-group opening/closing.</span>
+
+<span class="sd">        Called each time-step after the weekend toggle.  The default</span>
+<span class="sd">        implementation is a no-op.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="BasicSchoolPolicy.run">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.run">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the school policy.</span>
+
+<span class="sd">        Handles first-day setup, weekend toggling, warm-up layer</span>
+<span class="sd">        restoration (at day 35), subclass ``closing_and_opening`` hook,</span>
+<span class="sd">        and optional testing (from day 35 onwards).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">first_day_setup</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Hello world! This is the </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> function speaking.  </span><span class="si">{</span><span class="s1">&#39;(STOPPED)&#39;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="o">.</span><span class="n">stopped</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">weekend_start</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Start weekend, closing.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">back_up_layers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask_all_layers</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;End weekend, opening.&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">back_up_layers</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;The school policy started during weekend!&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">back_up_layers</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_day_back_up</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="mi">35</span>
+                <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span><span class="p">):</span>  <span class="c1"># 35 is sunday! run it after end of weekend</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_day_back_up</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">first_day_back_up</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># run it only once</span>
+            <span class="c1"># print(f&quot;t={self.model.t}&quot;)</span>
+            <span class="c1"># print(self.graph.layer_weights)</span>
+            <span class="c1"># exit()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">closing_and_opening</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="mi">35</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">testing</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">do_testing</span><span class="p">()</span></div>
+
+
+        <span class="c1"># if self.model.t % 7 == 1:</span>
+        <span class="c1">#    # print every week the mean degree of second group</span>
+        <span class="c1">#    students = self.graph.nodes[self.graph.nodes_age &lt; 20]</span>
+        <span class="c1">#    mean_degree = compute_mean_degree(self.graph, students)</span>
+        <span class="c1">#    logging.debug(f&quot;Day {self.model.t}: Mean degree of a student {mean_degree}&quot;)</span>
+
+<div class="viewcode-block" id="BasicSchoolPolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.to_df">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame with daily school-quarantine statistics.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: DataFrame indexed by time ``T`` with</span>
+<span class="sd">            column ``school_policy_in_quara`` (number of nodes in</span>
+<span class="sd">            school quarantine) and ``day``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="sa">f</span><span class="s2">&quot;school_policy_in_quara&quot;</span><span class="p">:</span>  <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quara</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+        <span class="p">}</span>
+        <span class="n">columns</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="ClosePartPolicy">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">ClosePartPolicy</span><span class="p">(</span><span class="n">BasicSchoolPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;School policy that can close specific classes listed in a config file.</span>
+
+<span class="sd">    Extends :class:`BasicSchoolPolicy` with helper methods to quarantine</span>
+<span class="sd">    or release all nodes belonging to a named set of classes.  On</span>
+<span class="sd">    first-day setup the classes listed under ``[CLOSED]`` in the config</span>
+<span class="sd">    file are sent to quarantine, and optionally all teacher edges are</span>
+<span class="sd">    closed.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The school contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">            The ``[CLOSED]`` section may contain:</span>
+
+<span class="sd">            * ``close_teachers`` – ``&quot;Yes&quot;`` to close teacher edges</span>
+<span class="sd">              (default ``&quot;No&quot;``).</span>
+<span class="sd">            * ``classes`` – list of class names to quarantine at start.</span>
+<span class="sd">        config_obj: Reserved for future use.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ClosePartPolicy.convert_class">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.convert_class">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">convert_class</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">a</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert node class indices to class-name strings.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            a (numpy.ndarray): Array of integer class indices.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of class-name strings (or ``None``</span>
+<span class="sd">            for out-of-range indices).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">_convert</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">cat_table</span><span class="p">[</span><span class="s2">&quot;class&quot;</span><span class="p">]</span><span class="o">+</span><span class="p">[</span><span class="kc">None</span><span class="p">])[</span><span class="n">x</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">_convert</span><span class="p">(</span><span class="n">a</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ClosePartPolicy.nodes_in_classes">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.nodes_in_classes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_in_classes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return node indices belonging to any of the specified classes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            list_of_classes (list[str]): Class names to look up.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Indices of all nodes whose class name is in</span>
+<span class="sd">            ``list_of_classes``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># todo - save node_classes? not to convert every time</span>
+        <span class="n">node_classes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">convert_class</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_class</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">node_classes</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">)]</span></div>
+
+
+<div class="viewcode-block" id="ClosePartPolicy.classes_to_quarantine">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.classes_to_quarantine">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">classes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Send all nodes in the specified classes to quarantine.</span>
+
+<span class="sd">        Marks nodes as not at school and switches off their school-layer</span>
+<span class="sd">        edges.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            list_of_classes (list[str]): Class names whose members</span>
+<span class="sd">                should be quarantined.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_close</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">list_of_classes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_close</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_close</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="s2">&quot;goes to the stay-at-home state.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># self.graph.modify_layers_for_nodes(self.nodes_to_close,</span>
+        <span class="c1">#                                   self.mask_all_layers)</span>
+        <span class="n">edges_to_close</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes_edges_on_layers</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_close</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">switch_off_edges</span><span class="p">(</span><span class="n">edges_to_close</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ClosePartPolicy.classes_from_quarantine">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.classes_from_quarantine">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">classes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Release all nodes in the specified classes from quarantine.</span>
+
+<span class="sd">        Marks nodes as at school and switches on their school-layer</span>
+<span class="sd">        edges.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            list_of_classes (list[str]): Class names whose members</span>
+<span class="sd">                should be released.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_release</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">list_of_classes</span><span class="p">)</span>
+        <span class="c1">#        self.graph.recover_edges_for_nodes(self.nodes_to_release)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">at_school</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_release</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_release</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="s2">&quot;goes to the go-to-school state.&quot;</span><span class="p">)</span>
+        <span class="n">edges_to_release</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes_edges_on_layers</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_release</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">switch_on_edges</span><span class="p">(</span><span class="n">edges_to_release</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ClosePartPolicy.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.first_day_setup">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run parent first-day setup and apply initial class closures from config.</span>
+
+<span class="sd">        Optionally closes teacher edges and quarantines classes listed</span>
+<span class="sd">        under ``[CLOSED]`` in the configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">first_day_setup</span><span class="p">()</span>
+
+        <span class="n">close_teachers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+            <span class="s2">&quot;CLOSED&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;close_teachers&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">close_teachers</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span><span class="p">:</span>
+            <span class="n">teachers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_age</span> <span class="o">&gt;=</span> <span class="mi">20</span><span class="p">]</span>
+            <span class="n">edges_to_close</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes_edges_on_layers</span><span class="p">(</span>
+                <span class="n">teachers</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">school_layers</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">switch_off_edges</span><span class="p">(</span><span class="n">edges_to_close</span><span class="p">)</span>
+
+        <span class="c1"># move teachers to R (just for one exp)</span>
+        <span class="c1">#teachers = self.graph.nodes[self.graph.nodes_age &gt;= 20]</span>
+        <span class="c1"># self.model.move_to_R(teachers)</span>
+
+        <span class="c1"># classes listed in config file goes to quarantine</span>
+        <span class="n">classes_to_close</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+            <span class="s2">&quot;CLOSED&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;classes&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">())</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">classes_to_close</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Closing classes </span><span class="si">{</span><span class="n">classes_to_close</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">classes_to_quarantine</span><span class="p">(</span><span class="n">classes_to_close</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No classes clossed.&quot;</span><span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="AlternatingPolicy">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">AlternatingPolicy</span><span class="p">(</span><span class="n">ClosePartPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;School policy that alternates two groups of classes week by week.</span>
+
+<span class="sd">    One group attends school while the other stays home; the groups</span>
+<span class="sd">    swap every week (at ``weekend_end``).  Optionally, testing sub-groups</span>
+<span class="sd">    can be defined to alternate which half of each group is tested on a</span>
+<span class="sd">    given day.</span>
+
+<span class="sd">    The groups are either defined explicitly in the config file</span>
+<span class="sd">    (``[ALTERNATE]`` section with ``group1`` and ``group2`` class lists)</span>
+<span class="sd">    or derived from the graph&#39;s ``nodes_class_group`` attribute when</span>
+<span class="sd">    ``use_class_groups = Yes``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The school contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to a configuration file with</span>
+<span class="sd">            ``[ALTERNATE]`` and optionally ``[TESTING_GROUPS]``</span>
+<span class="sd">            sections.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="AlternatingPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy.__init__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the alternating policy with group definitions from config.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The school contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="p">)</span>
+
+        <span class="n">rotate_class_groups</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+            <span class="s2">&quot;ALTERNATE&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;use_class_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">rotate_class_groups</span><span class="p">:</span>
+            <span class="n">group1</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+                <span class="s2">&quot;ALTERNATE&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;group1&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">())</span>
+            <span class="n">group2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span>
+                <span class="s2">&quot;ALTERNATE&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;group2&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">())</span>
+
+            <span class="n">nodes_group1</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">group1</span><span class="p">)</span>
+            <span class="n">nodes_group2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">group2</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">groups</span> <span class="o">=</span> <span class="p">(</span><span class="n">nodes_group1</span><span class="p">,</span> <span class="n">nodes_group2</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">nodes_group1</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_class_group</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span>
+            <span class="n">nodes_group2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_class_group</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">groups</span> <span class="o">=</span> <span class="p">(</span><span class="n">nodes_group1</span><span class="p">,</span> <span class="n">nodes_group2</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">passive_group</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">active_group</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">groups</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">passive_group</span><span class="p">])</span>
+
+        <span class="n">testing_cfg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TESTING_GROUPS&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">testing_cfg</span><span class="p">:</span>
+            <span class="n">use_class_groups</span> <span class="o">=</span> <span class="n">testing_cfg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                <span class="s2">&quot;use_class_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">use_class_groups</span><span class="p">:</span>
+                <span class="n">group1a</span> <span class="o">=</span> <span class="n">testing_cfg</span><span class="p">[</span><span class="s2">&quot;group1a&quot;</span><span class="p">]</span>
+                <span class="n">group1b</span> <span class="o">=</span> <span class="n">testing_cfg</span><span class="p">[</span><span class="s2">&quot;group1b&quot;</span><span class="p">]</span>
+                <span class="n">group2a</span> <span class="o">=</span> <span class="n">testing_cfg</span><span class="p">[</span><span class="s2">&quot;group2a&quot;</span><span class="p">]</span>
+                <span class="n">group2b</span> <span class="o">=</span> <span class="n">testing_cfg</span><span class="p">[</span><span class="s2">&quot;group2b&quot;</span><span class="p">]</span>
+
+                <span class="n">groupA</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">group1a</span><span class="o">+</span><span class="n">group2a</span><span class="p">)</span>
+                <span class="n">groupB</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes_in_classes</span><span class="p">(</span><span class="n">group1b</span><span class="o">+</span><span class="n">group2b</span><span class="p">)</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="o">=</span> <span class="p">(</span><span class="n">groupA</span><span class="p">,</span> <span class="n">groupB</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_passive</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_active</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
+
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">groupA</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_class_group</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span>
+                <span class="n">groupB</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes_class_group</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="o">=</span> <span class="p">(</span><span class="n">groupA</span><span class="p">,</span> <span class="n">groupB</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_passive</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_active</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="AlternatingPolicy.closing_and_opening">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy.closing_and_opening">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Alternate active and passive groups at the start of each school week.</span>
+
+<span class="sd">        At ``weekend_end`` the active and passive groups are swapped:</span>
+<span class="sd">        the previously active group is quarantined and the previously</span>
+<span class="sd">        passive group is released.  Every two weeks the testing sub-groups</span>
+<span class="sd">        are also rotated.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">7</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">passive_group</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">active_group</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">active_group</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">passive_group</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">groups</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">active_group</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">groups</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">passive_group</span><span class="p">])</span>
+
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Day </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2">: Groups changed. Active group is </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">active_group</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="mi">14</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_groups</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_active</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_passive</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_passive</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_active</span></div>
+</div>
+
+
+        <span class="c1"># if self.model.t % 7 == 1:</span>
+        <span class="c1">#    # print every week the mean degree of second group</span>
+        <span class="c1">#    group2 = self._nodes_in_classes(self.groups[1])</span>
+        <span class="c1">#    mean_degree = compute_mean_degree(self.graph, group2)</span>
+        <span class="c1">#    logging.debug(f&quot;Day {self.model.t}: Mean degree of group2 {mean_degree}&quot;)</span>
+
+
+<div class="viewcode-block" id="AlternateFreeMonday">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternateFreeMonday">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">AlternateFreeMonday</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Alternating policy where Monday is a free day (school starts Tuesday).</span>
+
+<span class="sd">    Groups alternate weekly.  Testing is disabled by default.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The school contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="AlternateFreeMonday.__init__">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternateFreeMonday.__init__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise with Monday as the first school day and no testing.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The school contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_start</span> <span class="o">=</span> <span class="mi">5</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">testing</span> <span class="o">=</span> <span class="kc">False</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="AlternateAndMondayPCR">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternateAndMondayPCR">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">AlternateAndMondayPCR</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Alternating policy with high-sensitivity (PCR-equivalent) Monday testing.</span>
+
+<span class="sd">    Groups alternate weekly.  Testing is enabled on Mondays (weekday</span>
+<span class="sd">    index 1) with a sensitivity of 0.8 (mimicking PCR).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The school contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="AlternateAndMondayPCR.__init__">
+<a class="viewcode-back" href="../src_modules.html#school_policy.AlternateAndMondayPCR.__init__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise with Monday testing at 80 % sensitivity.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The school contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_start</span> <span class="o">=</span> <span class="mi">5</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weekend_end</span> <span class="o">=</span> <span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">testing</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_sensitivity</span> <span class="o">=</span> <span class="mf">0.8</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_days</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,)</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>agent_info_models &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>agent_info_models</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for agent_info_models</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Information-diffusion and rumour-spreading model classes.</span>
+
+<span class="sd">This module defines several simulation models that reuse the</span>
+<span class="sd">:class:`~models.simulation_engine.SimulationEngine` infrastructure for</span>
+<span class="sd">information / opinion spreading rather than epidemic disease:</span>
+
+<span class="sd">* :class:`STATES` / :class:`Tipping` – state-code enumerations.</span>
+<span class="sd">* :class:`RumourModel` – basic SIR rumour-spreading model.</span>
+<span class="sd">* :class:`RumourModelInfo` – extended rumour model with time-varying</span>
+<span class="sd">  transmission and event-driven boost.</span>
+<span class="sd">* :class:`InfoSIRModel` – SIR model driven by graph edge probabilities.</span>
+<span class="sd">* :class:`InfoTippingModel` – threshold-based (tipping-point) adoption model.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.simulation_engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimulationEngine</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">RandomDuration</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">gen_tuple</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">global_configs</span>
+
+
+<div class="viewcode-block" id="STATES">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.STATES">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">STATES</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Simple SIR state codes for information-diffusion models.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        S (int): Susceptible (uninformed).</span>
+<span class="sd">        I (int): Infected / informed (spreading the rumour).</span>
+<span class="sd">        R (int): Recovered (stopped spreading).</span>
+<span class="sd">        EXT (int): External node.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">S</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">I</span> <span class="o">=</span> <span class="mi">1</span> 
+    <span class="n">R</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">EXT</span> <span class="o">=</span> <span class="mi">10</span></div>
+
+
+<div class="viewcode-block" id="Tipping">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.Tipping">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Tipping</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;State codes for the threshold-based tipping-point model.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        S (int): Susceptible (not yet adopted).</span>
+<span class="sd">        ACTIVE (int): Active (adopted / tipped).</span>
+<span class="sd">        EXT (int): External node.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">S</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">ACTIVE</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">EXT</span> <span class="o">=</span> <span class="mi">10</span></div>
+
+
+
+<div class="viewcode-block" id="RumourModel">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RumourModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Basic SIR rumour-spreading model on a contact network.</span>
+
+<span class="sd">    Agents transition S → I when a neighbour is I (with rate ``lambda0``),</span>
+<span class="sd">    and I → R after a fixed duration ``I_duration``.</span>
+
+<span class="sd">    Inherits the plan-based stepping logic from</span>
+<span class="sd">    :class:`~models.simulation_engine.SimulationEngine`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+    <span class="p">]</span>
+
+    <span class="n">num_states</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">states</span><span class="p">)</span>
+    <span class="n">state_str_dict</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">:</span> <span class="s2">&quot;S&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">:</span> <span class="s2">&quot;I&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">:</span> <span class="s2">&quot;R&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">:</span> <span class="s2">&quot;EXT&quot;</span>
+    <span class="p">}</span>
+    <span class="n">ext_code</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+
+    
+    <span class="n">transitions</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="n">num_transitions</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">transitions</span><span class="p">)</span>
+
+    <span class="n">final_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span>
+    <span class="p">]</span>
+
+    <span class="n">invisible_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+    <span class="p">]</span>
+
+    <span class="n">unstable_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span>
+    <span class="p">]</span>
+
+    <span class="n">fixed_model_parameters</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;I_duration&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;time in the I state&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span>  <span class="s2">&quot;rate of transmission (exposure)&quot;</span><span class="p">)</span>
+    <span class="p">}</span>
+
+<div class="viewcode-block" id="RumourModel.inicialization">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.inicialization">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent initialiser (no extra setup needed).&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="RumourModel.setup_series_and_time_keeping">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.setup_series_and_time_keeping">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent time-series setup.&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="RumourModel.states_and_counts_init">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.states_and_counts_init">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily checks.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            ext_nodes (int, optional): Number of external nodes.</span>
+<span class="sd">            ext_code (int, optional): State code for external nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="p">,</span> <span class="n">ext_code</span><span class="p">)</span>
+
+        <span class="c1"># need_check - state that needs regular checkup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_plan</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="RumourModel.prob_of_contact">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.prob_of_contact">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return nodes exposed by direct contact with I-state neighbours.</span>
+
+<span class="sd">        Iterates over all undirected edges.  For each edge between a node in</span>
+<span class="sd">        *source_state* and a node in *dest_state*, draws a Bernoulli coin with</span>
+<span class="sd">        probability *beta*.  Returns the indices of source nodes that were</span>
+<span class="sd">        exposed (may contain duplicates if a node has multiple I-neighbours).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            source_state (int): State code of susceptible nodes.</span>
+<span class="sd">            dest_state (int): State code of infectious nodes.</span>
+<span class="sd">            beta (float): Per-edge transmission probability.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: 1-D array of exposed node indices (possibly with</span>
+<span class="sd">            duplicates).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># source_states - states that can be infected</span>
+        <span class="c1"># dest_states - states that are infectious</span>
+
+        <span class="n">main_s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        
+        <span class="c1"># is source in feasible state?</span>
+        <span class="n">is_relevant_source</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        
+        <span class="c1"># is dest in feasible state?</span>
+        <span class="n">is_relevant_dest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        
+        <span class="n">is_relevant_edge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="n">is_relevant_source</span><span class="p">,</span>
+            <span class="n">is_relevant_dest</span>
+        <span class="p">)</span>
+
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">beta</span><span class="p">)</span> <span class="o">==</span> <span class="nb">float</span>
+
+        <span class="n">relevant_sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">]</span>
+        <span class="n">relevant_dests</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">]</span>
+
+        <span class="c1"># len(relevant_sources) == len(relevant_dests) --&gt; for each edge that must be considered take source and dest</span>
+        <span class="c1"># for each such edge draw a random number a test if &lt; beta ==&gt; get exposed nodes (the ones that are exposed at least once)</span>
+
+        <span class="n">num_relevant_edges</span> <span class="o">=</span> <span class="n">is_relevant_edge</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> 
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num_relevant_edges</span><span class="p">)</span> 
+        <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="n">beta</span> <span class="c1"># for each relevant edge if transmission happens </span>
+
+        <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">is_exposed</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        
+        <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="n">relevant_sources</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+        
+        <span class="n">main_e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PROBS OF CONTACT </span><span class="si">{</span><span class="n">main_e</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">main_s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">exposed_nodes</span></div>
+
+
+
+<div class="viewcode-block" id="RumourModel.daily_update">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.daily_update">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily rumour-spreading check for susceptible nodes.</span>
+
+<span class="sd">        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move</span>
+<span class="sd">        to I on the next day.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># S</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="c1"># try infection</span>
+        <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prob_of_contact</span><span class="p">(</span>
+            <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+            <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">lambda0</span><span class="p">,</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">exposed_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">exposed_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span></div>
+
+
+<div class="viewcode-block" id="RumourModel.update_plan">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.update_plan">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for nodes that just changed state.</span>
+
+<span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
+<span class="sd">        * I: scheduled to move to R after ``I_duration`` days.</span>
+<span class="sd">        * R: no further transition.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes to update.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># STATES.S:     &quot;S&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># STATES.I:   &quot;I&quot;</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">I_duration</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># STATES.R:   &quot;R&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="RumourModel.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.run_iteration">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent run_iteration (no extra logic needed).&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="RumourModelInfo">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RumourModelInfo</span><span class="p">(</span><span class="n">RumourModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended rumour model with time-decaying transmission and event boost.</span>
+
+<span class="sd">    Extends :class:`RumourModel` with:</span>
+
+<span class="sd">    * A time-decaying per-node transmission rate:</span>
+<span class="sd">      ``lambda = lambda0 * exp(-scale * time_in_I)``.</span>
+<span class="sd">    * An optional event at time ``t_event`` that adds a temporary boost to</span>
+<span class="sd">      lambda: ``lambda += event_boost * exp(-decay * (t - t_event))``.</span>
+<span class="sd">    * A stochastic I → R transition each day (probability ``beta_duration``).</span>
+
+<span class="sd">    The I state is maintained indefinitely until a daily Bernoulli trial</span>
+<span class="sd">    (probability ``beta_duration``) triggers recovery.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">fixed_model_parameters</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;lambda0&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">0.001</span><span class="p">,</span> <span class="s2">&quot;base rate of transmission&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="s2">&quot;scaling factor for the transmission probability&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_duration&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">0.02</span><span class="p">,</span><span class="s2">&quot;probability of ending the I state at each step&quot;</span><span class="p">),</span>
+        <span class="c1">#I_duration&quot;: (48, &quot;time in the I state&quot;),</span>
+        <span class="s2">&quot;t_event&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">95</span><span class="p">,</span> <span class="s2">&quot;time of the event that increases the spread&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;event_boost&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">0.02</span><span class="p">,</span> <span class="s2">&quot;boost in transmission rate after event&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;decay&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">0.06</span><span class="p">,</span> <span class="s2">&quot;decay rate of the increased spread after event&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;init_I&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="s2">&quot;initial number of infected nodes&quot;</span><span class="p">)</span>
+    <span class="p">}</span>
+    
+<div class="viewcode-block" id="RumourModelInfo.prob_of_contact">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.prob_of_contact">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return newly exposed nodes using time-decaying lambda and event boost.</span>
+
+<span class="sd">        Computes a per-node effective transmission rate ``lambda_`` based on:</span>
+
+<span class="sd">        * How long each I node has been infectious (decay over time).</span>
+<span class="sd">        * Whether the simulation has passed ``t_event`` (adds a boost).</span>
+
+<span class="sd">        Then for each S node uses the compound probability formula</span>
+<span class="sd">        ``1 - (1 - lambda_)^k`` where ``k`` is its count of I neighbours.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            source_state (int): State code of susceptible nodes (S).</span>
+<span class="sd">            dest_state (int): State code of infectious nodes (I).</span>
+<span class="sd">            beta: Unused (included for API compatibility with parent).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: 1-D array of exposed node indices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># source_states - states that can be infected</span>
+        <span class="c1"># dest_states - states that are infectious</span>
+
+        <span class="n">main_s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+        <span class="c1"># is source in feasible state?</span>
+        <span class="n">is_relevant_source</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+
+        <span class="c1"># is dest in feasible state?</span>
+        <span class="n">is_relevant_dest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        
+        <span class="n">is_relevant_edge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="n">is_relevant_source</span><span class="p">,</span>
+            <span class="n">is_relevant_dest</span>
+        <span class="p">)</span>
+
+        <span class="c1">#assert type(beta) == float</span>
+
+        <span class="c1"># let&#39;s count lambda for all nodes, even not relevant ones </span>
+        <span class="n">time_in_I</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="n">times</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        <span class="n">time_in_I</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">times</span>
+        <span class="n">lambda_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">lambda0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">*</span> <span class="n">time_in_I</span><span class="p">)</span>
+
+            
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_event</span><span class="p">:</span>
+                <span class="n">lambda_</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">event_boost</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">decay</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">t_event</span><span class="p">))</span>
+                         
+        <span class="n">relevant_sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">]</span>
+
+        <span class="n">N</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span> 
+        <span class="n">counts</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">bincount</span><span class="p">(</span><span class="n">relevant_sources</span><span class="p">,</span> <span class="n">minlength</span><span class="o">=</span><span class="n">N</span><span class="p">)</span>
+
+        <span class="c1">#print(len(counts), self.memberships.shape[1], N)</span>
+        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">counts</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span> 
+        
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">N</span><span class="p">)</span>
+        <span class="c1"># for all nodes, even those who are not relevant! for now  </span>
+        <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span>  <span class="mi">1</span> <span class="o">-</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">lambda_</span><span class="p">)</span> <span class="o">**</span> <span class="n">counts</span>
+
+        <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">N</span><span class="p">)[</span><span class="n">is_exposed</span><span class="p">]</span>
+
+        <span class="n">main_e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PROBS OF CONTACT </span><span class="si">{</span><span class="n">main_e</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">main_s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">exposed_nodes</span></div>
+
+
+<div class="viewcode-block" id="RumourModelInfo.daily_update">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.daily_update">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily spreading check and stochastic I → R transition.</span>
+
+<span class="sd">        Calls the parent :meth:`RumourModel.daily_update`, then for each I</span>
+<span class="sd">        node draws a Bernoulli coin (probability ``beta_duration``) to decide</span>
+<span class="sd">        if it recovers today.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">daily_update</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+
+        <span class="n">nodes_in_I</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">)</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes_in_I</span><span class="p">))</span>
+        <span class="n">end_I</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">beta_duration</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">nodes_in_I</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">end_I</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">end_I</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span></div>
+
+
+<div class="viewcode-block" id="RumourModelInfo.update_plan">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.update_plan">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for RumourModelInfo nodes.</span>
+
+<span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
+<span class="sd">        * I: no fixed deadline; flagged for daily checks (recovery is</span>
+<span class="sd">          decided stochastically each day).</span>
+<span class="sd">        * R: no further transition.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes to update.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># STATES.S:     &quot;S&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># STATES.I:   &quot;I&quot;</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># STATES.R:   &quot;R&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="InfoSIRModel">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">InfoSIRModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;SIR information-spreading model driven by graph edge probabilities.</span>
+
+<span class="sd">    Uses the full edge-probability machinery from the graph object (rather than</span>
+<span class="sd">    the simple per-edge coin flip of :class:`RumourModel`) to activate contacts</span>
+<span class="sd">    each day.  The effective transmission rate per active edge is given by</span>
+<span class="sd">    the per-node ``beta`` parameter multiplied by the edge intensity.</span>
+
+<span class="sd">    Compartments: S (uninformed), I (spreading), R (stopped), EXT (external).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+    <span class="p">]</span>
+
+    <span class="n">num_states</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">states</span><span class="p">)</span>
+    <span class="n">state_str_dict</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">:</span> <span class="s2">&quot;S&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">:</span> <span class="s2">&quot;I&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">:</span> <span class="s2">&quot;R&quot;</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">:</span> <span class="s2">&quot;EXT&quot;</span>
+    <span class="p">}</span>
+    <span class="n">ext_code</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+
+    
+    <span class="n">transitions</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="n">num_transitions</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">transitions</span><span class="p">)</span>
+
+    <span class="n">final_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R</span>
+    <span class="p">]</span>
+
+    <span class="n">invisible_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+    <span class="p">]</span>
+
+    <span class="n">unstable_states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I</span>
+    <span class="p">]</span>
+
+    <span class="n">fixed_model_parameters</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;I_duration&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;time in the I state&quot;</span><span class="p">),</span>
+    <span class="p">}</span>
+
+    <span class="n">model_parameters</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;beta&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span>  <span class="s2">&quot;rate of transmission (exposure)&quot;</span><span class="p">),</span>    
+    <span class="p">}</span>
+
+<div class="viewcode-block" id="InfoSIRModel.inicialization">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.inicialization">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent initialiser (no extra setup needed).&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="InfoSIRModel.setup_series_and_time_keeping">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.setup_series_and_time_keeping">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent time-series setup.&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="InfoSIRModel.states_and_counts_init">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.states_and_counts_init">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily infection checks.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            ext_nodes (int, optional): Number of external nodes.</span>
+<span class="sd">            ext_code (int, optional): State code for external nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="p">,</span> <span class="n">ext_code</span><span class="p">)</span>
+
+        <span class="c1"># need_check - state that needs regular checkup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_plan</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="InfoSIRModel.prob_of_contact">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.prob_of_contact">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute per-node exposure probability using edge probabilities and intensities.</span>
+
+<span class="sd">        Activates edges stochastically using the graph&#39;s edge-probability</span>
+<span class="sd">        vector, then evaluates both directions for each active edge.  For</span>
+<span class="sd">        edges connecting a *source_state* node to a *dest_state* node,</span>
+<span class="sd">        applies a Bernoulli trial with rate ``beta[source] * intensity``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            source_state (int): State code of susceptible nodes.</span>
+<span class="sd">            dest_state (int): State code of infectious nodes.</span>
+<span class="sd">            beta (numpy.ndarray): Per-node transmission rate array.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Binary exposure vector of shape ``(num_nodes, 1)``;</span>
+<span class="sd">            1 where a node was newly exposed.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># source_states - states that can be infected</span>
+        <span class="c1"># dest_states - states that are infectious</span>
+
+        <span class="n">main_s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+        <span class="n">edges_probs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_all_edges_probs</span><span class="p">()</span>
+        <span class="n">num_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges_probs</span><span class="p">)</span>
+
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num_edges</span><span class="p">)</span>
+        <span class="n">active_edges</span> <span class="o">=</span> <span class="p">(</span><span class="n">r</span> <span class="o">&lt;</span> <span class="n">edges_probs</span><span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;active_edges </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">active_edges</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">source_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+        <span class="n">dest_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+        <span class="n">types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+        <span class="c1"># contact_info = (</span>
+        <span class="c1">#     np.concatenate([source_nodes, dest_nodes]),</span>
+        <span class="c1">#     np.concatenate([dest_nodes, source_nodes]),</span>
+        <span class="c1">#     np.concatenate([types, types])</span>
+        <span class="c1"># )</span>
+        <span class="c1"># self.contact_history.append(contact_info)</span>
+
+        <span class="c1"># take them in both directions</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_edges</span><span class="p">)</span>
+        <span class="n">active_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">])</span>
+        <span class="n">active_edges_dirs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="n">active_edges_dirs</span><span class="p">[</span><span class="n">n</span><span class="p">:]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="n">source_nodes</span><span class="p">,</span> <span class="n">dest_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+            <span class="n">active_edges</span><span class="p">,</span>
+            <span class="n">active_edges_dirs</span>
+        <span class="p">)</span>
+
+        <span class="c1"># is source in feasible state?</span>
+        <span class="n">is_relevant_source</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_state</span><span class="p">,</span> <span class="n">source_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        
+        <span class="c1"># is dest in feasible state?</span>
+        <span class="n">is_relevant_dest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_state</span><span class="p">,</span> <span class="n">dest_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        
+        <span class="n">is_relevant_edge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="n">is_relevant_source</span><span class="p">,</span>
+            <span class="n">is_relevant_dest</span>
+        <span class="p">)</span>
+
+        <span class="c1">##########################</span>
+        <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">active_edges</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">]</span>
+
+        <span class="n">intensities</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_intensities</span><span class="p">(</span>
+            <span class="n">relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">relevant_sources</span><span class="p">,</span> <span class="n">relevant_dests</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+            <span class="n">relevant_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">])</span>
+
+        <span class="n">b_intensities</span> <span class="o">=</span> <span class="n">beta</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span>
+
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">intensities</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">b_intensities</span> <span class="o">*</span> <span class="n">intensities</span><span class="p">)</span>
+
+        
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">is_exposed</span> <span class="o">==</span> <span class="kc">False</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+        <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">is_exposed</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        
+        <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="n">relevant_sources</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+        
+        <span class="c1">#print(exposed_nodes)</span>
+        
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">ret</span><span class="p">[</span><span class="n">exposed_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+
+        <span class="n">main_e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PROBS OF CONTACT </span><span class="si">{</span><span class="n">main_e</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">main_s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ret</span></div>
+
+
+
+<div class="viewcode-block" id="InfoSIRModel.daily_update">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.daily_update">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily infection check for susceptible nodes.</span>
+
+<span class="sd">        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move</span>
+<span class="sd">        to I on the next day.  External nodes are not yet supported.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            NotImplementedError: If external nodes are present.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># S</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="c1"># if we have external nodes</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_ext_nodes</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;External nodes not implemented yet.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># try infection</span>
+        <span class="n">P_infection</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prob_of_contact</span><span class="p">(</span>
+                                      <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+                                      <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">,</span>
+                                      <span class="bp">self</span><span class="o">.</span><span class="n">beta</span>
+                                      <span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+        <span class="n">exposed</span> <span class="o">=</span> <span class="n">P_infection</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span>
+
+        <span class="n">exposed_mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="n">exposed_mask</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">exposed</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Number of infected&quot;</span><span class="p">,</span>  <span class="n">exposed_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">exposed_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">exposed_mask</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">exposed_mask</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">exposed_mask</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span></div>
+
+
+<div class="viewcode-block" id="InfoSIRModel.update_plan">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.update_plan">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for InfoSIRModel nodes.</span>
+
+<span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
+<span class="sd">        * I: scheduled to move to R after ``I_duration`` days.</span>
+<span class="sd">        * R: no further transition.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes to update.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># STATES.S:     &quot;S&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># STATES.I:   &quot;I&quot;</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">I_duration</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># STATES.R:   &quot;R&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="InfoSIRModel.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.run_iteration">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent run_iteration (no extra logic needed).&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span></div>
+</div>
+
+
+ 
+<div class="viewcode-block" id="InfoTippingModel">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">InfoTippingModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Threshold-based (tipping-point) adoption model on a contact network.</span>
+
+<span class="sd">    An agent adopts (S → ACTIVE) when the weighted fraction of its active</span>
+<span class="sd">    neighbours exceeds its personal threshold ``theta``.  Once active, the</span>
+<span class="sd">    agent remains active indefinitely.</span>
+
+<span class="sd">    Edge weights are the graph&#39;s ``e_intensities`` values, and daily contact</span>
+<span class="sd">    is stochastic (activated by edge probabilities).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">states</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">,</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">EXT</span>
+    <span class="p">]</span>
+
+    <span class="n">num_states</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">states</span><span class="p">)</span>
+
+    <span class="n">state_str_dict</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">S</span> <span class="p">:</span> <span class="s2">&quot;S&quot;</span><span class="p">,</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">:</span> <span class="s2">&quot;Active&quot;</span><span class="p">,</span>
+        <span class="n">Tipping</span><span class="o">.</span><span class="n">EXT</span><span class="p">:</span> <span class="s2">&quot;Ext&quot;</span>
+    <span class="p">}</span>
+    <span class="n">ext_code</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span>
+
+    
+    <span class="n">transitions</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="n">num_transitions</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">transitions</span><span class="p">)</span>
+
+    <span class="n">model_parameters</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;theta&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span>  <span class="s2">&quot;threshold&quot;</span><span class="p">),</span>    
+    <span class="p">}</span>
+
+
+<div class="viewcode-block" id="InfoTippingModel.states_and_counts_init">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.states_and_counts_init">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily tipping checks.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            ext_nodes (int, optional): Number of external nodes.</span>
+<span class="sd">            ext_code (int, optional): State code for external nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="p">,</span> <span class="n">ext_code</span><span class="p">)</span>
+
+        <span class="c1"># need_check - state that needs regular checkup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_plan</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">))</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_transmission</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a boolean bitmap of nodes that tip (S → ACTIVE) today.</span>
+
+<span class="sd">        For each S node, activates edges stochastically, counts the weighted</span>
+<span class="sd">        fraction of active neighbours, and flips the node to ACTIVE if the</span>
+<span class="sd">        fraction exceeds ``self.theta[node]``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of shape ``(num_nodes,)``; ``True``</span>
+<span class="sd">            where a node becomes active.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="n">active_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">]</span>
+
+        <span class="n">edges_probs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_all_edges_probs</span><span class="p">()</span>
+        <span class="n">num_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges_probs</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;num edges&quot;</span><span class="p">,</span> <span class="n">num_edges</span><span class="p">)</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num_edges</span><span class="p">)</span>
+        <span class="n">active_edges</span> <span class="o">=</span> <span class="p">(</span><span class="n">r</span> <span class="o">&lt;</span> <span class="n">edges_probs</span><span class="p">)</span> <span class="c1">#.nonzero()[0] #bitmap</span>
+        
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">node</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">):</span>
+            <span class="c1"># bitmap of node&#39;s edges</span>
+            <span class="n">my_edges</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span> <span class="o">==</span> <span class="n">node</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;my_edges&quot;</span><span class="p">,</span> <span class="n">my_edges</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+            <span class="c1"># keep only those that are active </span>
+            <span class="n">my_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+                <span class="n">my_edges</span><span class="p">,</span>
+                <span class="n">active_edges</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;my_edges (after logical and)&quot;</span><span class="p">,</span> <span class="n">my_edges</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">my_edges</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+            
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">my_edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># take destination nodes</span>
+            <span class="n">my_neighbours</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">my_edges</span><span class="p">]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;my neighbours&quot;</span><span class="p">,</span> <span class="n">my_neighbours</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+        
+            <span class="n">active_neighbours</span> <span class="o">=</span> <span class="n">my_neighbours</span><span class="p">[(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)[</span><span class="n">my_neighbours</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">()]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;active neighbours&quot;</span><span class="p">,</span> <span class="n">active_neighbours</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+            <span class="n">my_edges_to_active</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">my_edges</span><span class="p">],</span> <span class="n">active_neighbours</span><span class="p">)</span>
+
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;my_edges_to_active&quot;</span><span class="p">,</span> <span class="n">my_edges_to_active</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+            <span class="n">sum_all</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_intensities</span><span class="p">[</span><span class="n">my_edges</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+            <span class="n">sum_active</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_intensities</span><span class="p">[</span><span class="n">my_edges</span><span class="p">][</span><span class="n">my_edges_to_active</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">sum_active</span> <span class="o">/</span> <span class="n">sum_all</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">theta</span><span class="p">[</span><span class="n">node</span><span class="p">]:</span>
+                <span class="n">ret</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>
+        
+        <span class="k">return</span> <span class="n">ret</span> 
+
+<div class="viewcode-block" id="InfoTippingModel.daily_update">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.daily_update">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily tipping check: activate nodes whose threshold is met.</span>
+
+<span class="sd">        Calls :meth:`_transmission` and schedules newly tipping nodes to</span>
+<span class="sd">        move to ACTIVE on the next day.  External nodes are not supported.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes needing a check.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            NotImplementedError: If external nodes are present.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># S</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="c1"># if we have external nodes</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_ext_nodes</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;External nodes not present in Tipping Model.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># try infection</span>
+        <span class="n">transmission</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transmission</span><span class="p">()</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">transmission</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">transmission</span><span class="p">]</span> <span class="o">=</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span></div>
+
+
+<div class="viewcode-block" id="InfoTippingModel.update_plan">
+<a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.update_plan">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for InfoTippingModel nodes.</span>
+
+<span class="sd">        * S: no scheduled transition; flagged for daily tipping checks.</span>
+<span class="sd">        * ACTIVE: stays ACTIVE indefinitely; no further scheduled transition.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes to update.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># STATES.S:     &quot;S&quot;,</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">S</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">S</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># STATES.Active:   &quot;Active&quot;</span>
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_nodes</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">Tipping</span><span class="o">.</span><span class="n">ACTIVE</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+</div>
+
+
+
+
+            
+  
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

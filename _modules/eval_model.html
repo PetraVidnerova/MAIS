@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>eval_model &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>eval_model</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for eval_model</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Evaluation metrics for comparing model output to observed data.</span>
+
+<span class="sd">This module provides functions to extract model predictions and compute</span>
+<span class="sd">common regression-quality metrics (RMSE, MAE, R-squared) between the</span>
+<span class="sd">simulated counts and ground-truth observations. The ``return_func_zoo``</span>
+<span class="sd">dictionary maps string keys to these metric functions so that callers can</span>
+<span class="sd">select a metric by name at runtime.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.states</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.metrics</span><span class="w"> </span><span class="kn">import</span> <span class="n">mean_squared_error</span><span class="p">,</span> <span class="n">mean_absolute_error</span>
+
+
+<div class="viewcode-block" id="detected_active_counts">
+<a class="viewcode-back" href="../src_modules.html#eval_model.detected_active_counts">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">detected_active_counts</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract the time-series of simulated counts for a given model column.</span>
+
+<span class="sd">    Reads the model&#39;s output DataFrame and returns all rows after the first</span>
+<span class="sd">    (index 0) as a NumPy array, matching the convention used by the</span>
+<span class="sd">    optimisation routines.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: A ``ModelM`` instance that has already been run.  Must expose</span>
+<span class="sd">            a ``get_df()`` method returning a pandas DataFrame with at least</span>
+<span class="sd">            one column named ``fit_column``.</span>
+<span class="sd">        fit_column (str): Name of the DataFrame column to extract (e.g.</span>
+<span class="sd">            ``&#39;I_d&#39;`` for detected infectious individuals).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: 1-D array of simulated counts, one entry per</span>
+<span class="sd">        simulated day (the day-0 initialisation row is excluded).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">get_df</span><span class="p">()</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="n">counts</span><span class="p">[</span><span class="n">fit_column</span><span class="p">][</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">counts</span></div>
+
+
+
+<div class="viewcode-block" id="model_rmse">
+<a class="viewcode-back" href="../src_modules.html#eval_model.model_rmse">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">model_rmse</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">y_true</span><span class="p">,</span> <span class="n">fit_column</span><span class="o">=</span><span class="s1">&#39;I_d&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the root-mean-squared error between model output and observations.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: A ``ModelM`` instance that has already been run.</span>
+<span class="sd">        y_true (numpy.ndarray): Array of observed (ground-truth) values with</span>
+<span class="sd">            the same length as the model output series.</span>
+<span class="sd">        fit_column (str): Column in the model DataFrame to compare against</span>
+<span class="sd">            ``y_true``.  Defaults to ``&#39;I_d&#39;``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: RMSE between the model-predicted counts and ``y_true``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">infected_count</span> <span class="o">=</span> <span class="n">detected_active_counts</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">mean_squared_error</span><span class="p">(</span><span class="n">y_true</span><span class="p">,</span> <span class="n">infected_count</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="model_mae">
+<a class="viewcode-back" href="../src_modules.html#eval_model.model_mae">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">model_mae</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">y_true</span><span class="p">,</span> <span class="n">fit_column</span><span class="o">=</span><span class="s1">&#39;I_d&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the mean absolute error between model output and observations.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: A ``ModelM`` instance that has already been run.</span>
+<span class="sd">        y_true (numpy.ndarray): Array of observed (ground-truth) values with</span>
+<span class="sd">            the same length as the model output series.</span>
+<span class="sd">        fit_column (str): Column in the model DataFrame to compare against</span>
+<span class="sd">            ``y_true``.  Defaults to ``&#39;I_d&#39;``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: MAE between the model-predicted counts and ``y_true``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">infected_count</span> <span class="o">=</span> <span class="n">detected_active_counts</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">mean_absolute_error</span><span class="p">(</span><span class="n">y_true</span><span class="p">,</span> <span class="n">infected_count</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="model_r_squared">
+<a class="viewcode-back" href="../src_modules.html#eval_model.model_r_squared">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">model_r_squared</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">y_true</span><span class="p">,</span> <span class="n">fit_column</span><span class="o">=</span><span class="s1">&#39;I_d&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute a negated coefficient of determination (R²) for use as a loss.</span>
+
+<span class="sd">    The value is negated so that minimising it corresponds to maximising the</span>
+<span class="sd">    conventional R² fit quality.  A small epsilon (``np.finfo(np.float32).eps``)</span>
+<span class="sd">    is added to the total sum of squares to avoid division by zero when</span>
+<span class="sd">    ``y_true`` is constant.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: A ``ModelM`` instance that has already been run.</span>
+<span class="sd">        y_true (numpy.ndarray): Array of observed (ground-truth) values with</span>
+<span class="sd">            the same length as the model output series.</span>
+<span class="sd">        fit_column (str): Column in the model DataFrame to compare against</span>
+<span class="sd">            ``y_true``.  Defaults to ``&#39;I_d&#39;``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Negated R² score, i.e. ``-(1 - RSS/TSS)``.  A perfect fit</span>
+<span class="sd">        returns ``0.0``; worse fits return increasingly negative values.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">infected_count</span> <span class="o">=</span> <span class="n">detected_active_counts</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">)</span>
+    <span class="n">y_mean</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">y_true</span><span class="p">)</span>
+    <span class="n">tss</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">y_true</span> <span class="o">-</span> <span class="n">y_mean</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span>
+    <span class="n">rss</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">y_true</span> <span class="o">-</span> <span class="n">infected_count</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="k">return</span> <span class="o">-</span><span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">rss</span> <span class="o">/</span> <span class="n">tss</span><span class="p">)</span></div>
+
+
+
+<span class="n">return_func_zoo</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;rmse&#39;</span><span class="p">:</span> <span class="n">model_rmse</span><span class="p">,</span>
+    <span class="s1">&#39;mae&#39;</span><span class="p">:</span> <span class="n">model_mae</span><span class="p">,</span>
+    <span class="s1">&#39;r2&#39;</span><span class="p">:</span> <span class="n">model_r_squared</span>
+<span class="p">}</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

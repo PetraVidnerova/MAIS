@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>plot_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>plot_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for plot_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Plotting utilities for MAIS simulation histories.</span>
+
+<span class="sd">This module provides functions for loading simulation output CSV files and</span>
+<span class="sd">visualising epidemic curves and other time-series metrics via Matplotlib and</span>
+<span class="sd">Seaborn. It supports single-run plots, multi-run aggregated line plots, and</span>
+<span class="sd">animated state-histogram views.</span>
+
+<span class="sd">Public API:</span>
+<span class="sd">    - :func:`plot_history`: Quick plot of a single history file.</span>
+<span class="sd">    - :func:`plot_histories`: Aggregate multiple runs on one axis.</span>
+<span class="sd">    - :func:`plot_mutliple_policies`: Compare policies on a single metric.</span>
+<span class="sd">    - :func:`plot_mutliple_policies_everything`: Multi-panel comparison across</span>
+<span class="sd">      all tracked metrics.</span>
+<span class="sd">    - :func:`plot_state_histogram`: Animated per-state bar chart over time.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">seaborn</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">sns</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">matplotlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">animation</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span>
+
+
+<div class="viewcode-block" id="plot_history">
+<a class="viewcode-back" href="../src_modules.html#plot_utils.plot_history">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_history</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Plot the ``all_infectious`` curve from a single simulation history CSV.</span>
+
+<span class="sd">    Loads the history file, plots ``all_infectious`` against ``T`` using the</span>
+<span class="sd">    default Pandas/Matplotlib backend, and displays the figure interactively.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the simulation output CSV file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">_load_history</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+    <span class="n">history</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="plot_histories">
+<a class="viewcode-back" href="../src_modules.html#plot_utils.plot_histories">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_histories</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">group_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">group_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;max&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Plot ``all_infectious`` from multiple simulation history CSV files.</span>
+
+<span class="sd">    Loads each history file, optionally groups records into day-buckets, then</span>
+<span class="sd">    overlays all runs on a single line plot using :func:`_plot_lineplot`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        *args (str): One or more paths to simulation output CSV files.</span>
+<span class="sd">        group_days (int, optional): If set, aggregates rows into buckets of</span>
+<span class="sd">            this many days before plotting. Defaults to ``None`` (no</span>
+<span class="sd">            grouping).</span>
+<span class="sd">        group_func (str, optional): Aggregation function applied within each</span>
+<span class="sd">            day bucket (e.g., ``&quot;max&quot;``, ``&quot;mean&quot;``). Defaults to ``&quot;max&quot;``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to</span>
+<span class="sd">            :func:`_plot_lineplot` (e.g., ``title``, ``save_path``).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">histories</span> <span class="o">=</span> <span class="p">[</span><span class="n">_history_with_fname</span><span class="p">(</span>
+        <span class="n">filename</span><span class="p">,</span> <span class="n">group_days</span><span class="o">=</span><span class="n">group_days</span><span class="p">,</span> <span class="n">group_func</span><span class="o">=</span><span class="n">group_func</span><span class="p">)</span> <span class="k">for</span> <span class="n">filename</span> <span class="ow">in</span> <span class="n">args</span><span class="p">]</span>
+    <span class="n">history_one_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">histories</span><span class="p">)</span>
+    <span class="n">_plot_lineplot</span><span class="p">(</span><span class="n">history_one_df</span><span class="p">,</span> <span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="s2">&quot;all_infectious&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="plot_mutliple_policies">
+<a class="viewcode-back" href="../src_modules.html#plot_utils.plot_mutliple_policies">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_mutliple_policies</span><span class="p">(</span><span class="n">policy_dict</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
+                           <span class="n">group_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">group_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;max&quot;</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">,</span> <span class="n">max_days</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compare a single metric across multiple policies on one line plot.</span>
+
+<span class="sd">    For each policy, loads all associated history files, concatenates them,</span>
+<span class="sd">    and renders a median line with inter-quartile shading using</span>
+<span class="sd">    :func:`_plot_lineplot`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        policy_dict (Dict[str, List[str]]): Mapping of policy name to a list</span>
+<span class="sd">            of history CSV file paths for that policy.</span>
+<span class="sd">        group_days (int, optional): Day-bucket size for temporal aggregation.</span>
+<span class="sd">            Defaults to ``None`` (no grouping).</span>
+<span class="sd">        group_func (str, optional): Aggregation function applied per bucket.</span>
+<span class="sd">            Defaults to ``&quot;max&quot;``.</span>
+<span class="sd">        value (str, optional): Column name of the metric to plot on the</span>
+<span class="sd">            y-axis. Defaults to ``&quot;all_infectious&quot;``.</span>
+<span class="sd">        max_days (int, optional): If set, truncates each history to the first</span>
+<span class="sd">            ``max_days`` rows. Defaults to ``None``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to</span>
+<span class="sd">            :func:`_plot_lineplot`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">histories</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">policy_key</span><span class="p">,</span> <span class="n">history_list</span> <span class="ow">in</span> <span class="n">policy_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">histories</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="n">_history_with_fname</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span>
+                                              <span class="n">group_days</span><span class="o">=</span><span class="n">group_days</span><span class="p">,</span>
+                                              <span class="n">group_func</span><span class="o">=</span><span class="n">group_func</span><span class="p">,</span>
+                                              <span class="n">policy_name</span><span class="o">=</span><span class="n">policy_key</span><span class="p">,</span>
+                                              <span class="n">max_days</span><span class="o">=</span><span class="n">max_days</span><span class="p">)</span>
+                          <span class="k">for</span> <span class="n">filename</span> <span class="ow">in</span> <span class="n">history_list</span><span class="p">])</span>
+
+    <span class="n">history_one_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">histories</span><span class="p">)</span>
+    <span class="n">_plot_lineplot</span><span class="p">(</span><span class="n">history_one_df</span><span class="p">,</span> <span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span>
+                   <span class="n">hue</span><span class="o">=</span><span class="s2">&quot;policy_name&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="plot_mutliple_policies_everything">
+<a class="viewcode-back" href="../src_modules.html#plot_utils.plot_mutliple_policies_everything">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_mutliple_policies_everything</span><span class="p">(</span><span class="n">policy_dict</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
+                                      <span class="n">group_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">group_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;max&quot;</span><span class="p">,</span>
+                                      <span class="n">max_days</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a multi-panel comparison of all tracked metrics across multiple policies.</span>
+
+<span class="sd">    Loads and concatenates histories for every policy, then delegates to</span>
+<span class="sd">    either :func:`_plot_lineplot2` (variant 2) or :func:`_plot_lineplot3`</span>
+<span class="sd">    (default) depending on the optional ``variant`` keyword argument.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        policy_dict (Dict[str, List[str]]): Mapping of policy name to a list</span>
+<span class="sd">            of history CSV file paths for that policy.</span>
+<span class="sd">        group_days (int, optional): Day-bucket size for temporal aggregation.</span>
+<span class="sd">            Defaults to ``None`` (no grouping).</span>
+<span class="sd">        group_func (str, optional): Aggregation function applied per bucket.</span>
+<span class="sd">            Defaults to ``&quot;max&quot;``.</span>
+<span class="sd">        max_days (int, optional): If set, truncates each history to the first</span>
+<span class="sd">            ``max_days`` rows. Defaults to ``None``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to the chosen plot</span>
+<span class="sd">            function. The special key ``variant`` (int) selects the plot</span>
+<span class="sd">            layout (``2`` selects :func:`_plot_lineplot2`; any other value</span>
+<span class="sd">            selects :func:`_plot_lineplot3`). The ``title`` key is required</span>
+<span class="sd">            by the underlying plot functions.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">histories</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">policy_key</span><span class="p">,</span> <span class="n">history_list</span> <span class="ow">in</span> <span class="n">policy_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">histories</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="n">_history_with_fname</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span>
+                                              <span class="n">group_days</span><span class="o">=</span><span class="n">group_days</span><span class="p">,</span>
+                                              <span class="n">group_func</span><span class="o">=</span><span class="n">group_func</span><span class="p">,</span>
+                                              <span class="n">policy_name</span><span class="o">=</span><span class="n">policy_key</span><span class="p">,</span>
+                                              <span class="n">max_days</span><span class="o">=</span><span class="n">max_days</span><span class="p">)</span>
+                          <span class="k">for</span> <span class="n">filename</span> <span class="ow">in</span> <span class="n">history_list</span><span class="p">])</span>
+
+    <span class="n">history_one_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">histories</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="s2">&quot;variant&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span> <span class="ow">and</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;variant&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="n">plot_function</span> <span class="o">=</span> <span class="n">_plot_lineplot2</span>
+        <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;variant&quot;</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">plot_function</span> <span class="o">=</span> <span class="n">_plot_lineplot3</span>
+
+    <span class="n">plot_function</span><span class="p">(</span><span class="n">history_one_df</span><span class="p">,</span> <span class="s2">&quot;day&quot;</span><span class="p">,</span>
+                  <span class="n">hue</span><span class="o">=</span><span class="s2">&quot;policy_name&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="plot_state_histogram">
+<a class="viewcode-back" href="../src_modules.html#plot_utils.plot_state_histogram">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_state_histogram</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Simulation&quot;</span><span class="p">,</span> <span class="n">states</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">save_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Render an animated bar chart showing the per-state population over time.</span>
+
+<span class="sd">    Reads the given history CSV and produces an animation where each frame</span>
+<span class="sd">    corresponds to one simulation day. Each bar represents a disease/model</span>
+<span class="sd">    state, and its height equals the number of nodes in that state on the</span>
+<span class="sd">    corresponding day.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the simulation output CSV file.</span>
+<span class="sd">        title (str, optional): Base title displayed in the figure. The current</span>
+<span class="sd">            day number is appended dynamically per frame. Defaults to</span>
+<span class="sd">            ``&quot;Simulation&quot;``.</span>
+<span class="sd">        states (List[str], optional): Subset of state column names to include</span>
+<span class="sd">            in the histogram. If ``None``, all state columns present in the</span>
+<span class="sd">            CSV (excluding metadata columns) are shown. Defaults to ``None``.</span>
+<span class="sd">        save_path (str, optional): If provided, the animation is saved to this</span>
+<span class="sd">            file path using FFMpeg at 10 fps before being displayed. Defaults</span>
+<span class="sd">            to ``None``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">animate</span><span class="p">(</span><span class="n">i</span><span class="p">):</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">title</span><span class="si">}</span><span class="s2"> - day </span><span class="si">{</span><span class="n">day_labels</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">data_i</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">d</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">data_i</span><span class="p">,</span> <span class="n">bars</span><span class="p">):</span>
+            <span class="n">b</span><span class="o">.</span><span class="n">set_height</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">d</span><span class="p">))</span>
+
+    <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">()</span>
+
+    <span class="n">history</span> <span class="o">=</span> <span class="n">_history_with_fname</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">group_days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">keep_only_all</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">day_labels</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">history</span><span class="o">.</span><span class="n">drop</span><span class="p">([</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="s2">&quot;all_infectious&quot;</span><span class="p">,</span> <span class="s2">&quot;filename&quot;</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">states</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">states</span><span class="p">]</span>
+
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">barplot</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span>
+                       <span class="n">data</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">tick_label</span><span class="o">=</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+
+    <span class="n">anim</span> <span class="o">=</span> <span class="n">animation</span><span class="o">.</span><span class="n">FuncAnimation</span><span class="p">(</span><span class="n">fig</span><span class="p">,</span> <span class="n">animate</span><span class="p">,</span> <span class="n">repeat</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">blit</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">frames</span><span class="o">=</span><span class="n">history</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="n">interval</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">anim</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">save_path</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="n">animation</span><span class="o">.</span><span class="n">FFMpegWriter</span><span class="p">(</span><span class="n">fps</span><span class="o">=</span><span class="mi">10</span><span class="p">))</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_plot_lineplot</span><span class="p">(</span><span class="n">history_df</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">hue</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a median line plot with IQR shading, grouped by a hue column.</span>
+
+<span class="sd">    For each unique value in the ``hue`` column the function draws the median</span>
+<span class="sd">    trajectory and fills between the 25th and 75th percentiles. Y-axis limits</span>
+<span class="sd">    are hard-coded based on the metric name (``mean_waiting`` → ``[0, 10]``;</span>
+<span class="sd">    everything else → ``[0, 150]``).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        history_df (pandas.DataFrame): Combined history data for all policies/</span>
+<span class="sd">            runs.</span>
+<span class="sd">        x (str): Column name to use as the x-axis (typically ``&quot;day&quot;``).</span>
+<span class="sd">        y (str): Column name to use as the y-axis metric.</span>
+<span class="sd">        hue (str, optional): Column name used to separate runs into groups</span>
+<span class="sd">            (e.g., ``&quot;policy_name&quot;``). Defaults to ``None``.</span>
+<span class="sd">        save_path (str, optional): If provided, the figure is saved to this</span>
+<span class="sd">            path before display. Defaults to ``None``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments. The ``title`` key (str) is</span>
+<span class="sd">            extracted and applied as the axes title; remaining keys are</span>
+<span class="sd">            currently unused.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="s2">&quot;title&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="n">title</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">title</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="n">fig</span><span class="p">,</span> <span class="n">axs</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">()</span>
+
+    <span class="k">for</span> <span class="n">policy</span> <span class="ow">in</span> <span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">():</span>
+        <span class="n">policy_df</span> <span class="o">=</span> <span class="n">history_df</span><span class="p">[</span><span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span> <span class="o">==</span> <span class="n">policy</span><span class="p">]</span>
+
+        <span class="n">policy_stats</span> <span class="o">=</span> <span class="n">policy_df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">x</span><span class="p">,</span> <span class="n">policy</span><span class="p">])</span><span class="o">.</span><span class="n">describe</span><span class="p">()</span>
+        <span class="n">q1</span> <span class="o">=</span> <span class="n">policy_stats</span><span class="p">[</span><span class="n">y</span><span class="p">][</span><span class="s2">&quot;25%&quot;</span><span class="p">]</span>
+        <span class="n">q3</span> <span class="o">=</span> <span class="n">policy_stats</span><span class="p">[</span><span class="n">y</span><span class="p">][</span><span class="s2">&quot;75%&quot;</span><span class="p">]</span>
+
+        <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="n">y</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">policy_df</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">policy</span><span class="p">,</span>
+                     <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">)</span>
+        <span class="n">axs</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">policy_df</span><span class="p">[</span><span class="n">x</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">())),</span> <span class="n">q1</span><span class="p">,</span> <span class="n">q3</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
+
+    <span class="c1"># dirty hack (ro)</span>
+    <span class="k">if</span> <span class="n">y</span> <span class="o">==</span> <span class="s2">&quot;mean_waiting&quot;</span><span class="p">:</span>
+        <span class="n">axs</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">))</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">axs</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">150</span><span class="p">))</span>
+    <span class="n">axs</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">save_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="n">save_path</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_plot_lineplot2</span><span class="p">(</span><span class="n">history_df</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">hue</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">plotall</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a two-panel line plot comparing detected and total infectious cases.</span>
+
+<span class="sd">    Produces a side-by-side figure with:</span>
+<span class="sd">    - Left panel: median ``I_d`` (detected active cases).</span>
+<span class="sd">    - Right panel: median ``all_infectious`` (all active cases, excluding the</span>
+<span class="sd">      ``&quot;Czech Republic (scaled down)&quot;`` policy).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        history_df (pandas.DataFrame): Combined history data for all policies/</span>
+<span class="sd">            runs.</span>
+<span class="sd">        x (str): Column name for the x-axis (typically ``&quot;day&quot;``).</span>
+<span class="sd">        hue (str, optional): Column name used to colour lines by group.</span>
+<span class="sd">            Defaults to ``None``.</span>
+<span class="sd">        save_path (str, optional): If provided, the figure is saved to this</span>
+<span class="sd">            path. Defaults to ``None``.</span>
+<span class="sd">        plotall (bool, optional): Unused in this variant; kept for API</span>
+<span class="sd">            consistency. Defaults to ``True``.</span>
+<span class="sd">        **kwargs: Must contain ``title`` (str) for the figure super-title.</span>
+<span class="sd">            Optional keys: ``maxy`` (int, y-axis upper limit) and ``maxx``</span>
+<span class="sd">            (int, x-axis upper limit).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">title</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+    <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+    <span class="n">maxy</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;maxy&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;maxy&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;maxy&quot;</span><span class="p">]</span>
+
+    <span class="n">maxx</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;maxx&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;maxx&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;maxx&quot;</span><span class="p">]</span>
+
+    <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">()</span>
+    <span class="n">axs</span> <span class="o">=</span> <span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="mi">2</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">121</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">122</span><span class="p">)</span>
+<span class="c1">#    axs[2] = fig.add_subplot(223)</span>
+<span class="c1">#    axs[3] = fig.add_subplot(224)</span>
+
+    <span class="c1"># dirty hack to get rid of stupid legend title</span>
+    <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;legend&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">sns_plot</span> <span class="o">=</span> <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;I_d&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df</span><span class="p">,</span>
+                            <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="n">history_df_r</span> <span class="o">=</span> <span class="n">history_df</span><span class="p">[</span><span class="n">history_df</span><span class="p">[</span><span class="s2">&quot;policy_name&quot;</span><span class="p">]</span>
+                              <span class="o">!=</span> <span class="s2">&quot;Czech Republic (scaled down)&quot;</span><span class="p">]</span>
+<span class="c1">#    maxy = 5000</span>
+    <span class="c1"># dirty hack (ro)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">maxy</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">maxx</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;all detected states&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;detected - active cases - median&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+    <span class="n">sns_plot2</span> <span class="o">=</span> <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df_r</span><span class="p">,</span>
+                             <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+<span class="c1">#    maxy = 25000</span>
+    <span class="c1"># dirty hack (ro)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">maxy</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">maxx</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;all infected states&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;all active cases - median&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df_r</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    sns_plot = sns.lineplot(x=x, y=&quot;I_d&quot;, data=history_df,</span>
+<span class="sd">                            hue=hue, estimator=np.mean, ci=&#39;sd&#39;, ax=axs[2], **kwargs)</span>
+
+<span class="sd">    history_df_r = history_df[history_df[&quot;policy_name&quot;] != &quot;Czech Republic (scaled down)&quot;]</span>
+
+<span class="sd">    maxy = 5000</span>
+<span class="sd">    # dirty hack (ro)</span>
+<span class="sd">    axs[2].set(ylim=(0, maxy))</span>
+<span class="sd">    axs[2].set(xlim=(0, maxx))</span>
+<span class="sd">    axs[2].set_ylabel(&quot;all detected states&quot;)</span>
+<span class="sd">    axs[2].set_title(&quot;detected - active cases - mean&quot;)</span>
+<span class="sd">    axs[2].legend(history_df[hue].unique(), title=None, fancybox=True, )</span>
+
+<span class="sd">    sns_plot2 = sns.lineplot(x=x, y=&quot;all_infectious&quot;, data=history_df_r,</span>
+<span class="sd">                             hue=hue, estimator=np.mean, ci=&#39;sd&#39;, ax=axs[3], **kwargs)</span>
+<span class="sd">    maxy = 25000</span>
+<span class="sd">    # dirty hack (ro)</span>
+<span class="sd">    axs[3].set(ylim=(0, maxy))</span>
+<span class="sd">    axs[3].set(xlim=(0, maxx))</span>
+<span class="sd">    axs[3].set_ylabel(&quot;all infected states&quot;)</span>
+<span class="sd">    axs[3].set_title(&quot;all active cases - mean&quot;)</span>
+<span class="sd">    axs[3].legend(history_df_r[hue].unique(), title=None, fancybox=True, )</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="n">save_path</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_plot_lineplot3</span><span class="p">(</span><span class="n">history_df</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">hue</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">plotall</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a multi-panel line plot covering all key epidemic metrics.</span>
+
+<span class="sd">    Produces up to six panels depending on ``plotall``:</span>
+<span class="sd">    - Panel 0: Median detected active cases (``I_d``).</span>
+<span class="sd">    - Panel 1: Median total infectious cases (``all_infectious``).</span>
+<span class="sd">    - Panel 2 (if ``plotall``): Median mean waiting time (``mean_waiting``).</span>
+<span class="sd">    - Panel 3: Median detection ratio (``detected_ratio``).</span>
+<span class="sd">    - Panel 4 (if ``plotall``): Median total tests (``all_tests``).</span>
+<span class="sd">    - Panel 5 (if ``plotall``): Median mean infection probability</span>
+<span class="sd">      (``mean_p_infection``).</span>
+
+<span class="sd">    Vertical reference lines are drawn at days 5, 36, 66, and 97 on</span>
+<span class="sd">    the panels that show them.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        history_df (pandas.DataFrame): Combined history data for all policies/</span>
+<span class="sd">            runs.</span>
+<span class="sd">        x (str): Column name for the x-axis (typically ``&quot;day&quot;``).</span>
+<span class="sd">        hue (str, optional): Column name used to colour lines by group.</span>
+<span class="sd">            Defaults to ``None``.</span>
+<span class="sd">        save_path (str, optional): If provided, the figure is saved to this</span>
+<span class="sd">            path. Defaults to ``None``.</span>
+<span class="sd">        plotall (bool, optional): Whether to include the additional three</span>
+<span class="sd">            panels (waiting time, tests, infection probability). Defaults to</span>
+<span class="sd">            ``True``.</span>
+<span class="sd">        **kwargs: Must contain ``title`` (str) for the figure super-title.</span>
+<span class="sd">            Optional key: ``maxy`` (int, y-axis upper limit; default ``300``).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">title</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+    <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;title&quot;</span><span class="p">]</span>
+    <span class="n">maxy</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;maxy&quot;</span><span class="p">,</span> <span class="mi">300</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;maxy&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;maxy&quot;</span><span class="p">]</span>
+
+    <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">()</span>
+    <span class="n">axs</span> <span class="o">=</span> <span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="mi">6</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">131</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">132</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">plotall</span><span class="p">:</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">433</span><span class="p">)</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">436</span><span class="p">)</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">439</span><span class="p">)</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">12</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">133</span><span class="p">)</span>
+
+    <span class="c1"># axs[2] = fig.add_subplot(433)</span>
+    <span class="c1"># axs[3] = fig.add_subplot(436)</span>
+    <span class="c1"># axs[4] = fig.add_subplot(439)</span>
+    <span class="c1"># axs[5] = fig.add_subplot(4,3,12)</span>
+
+    <span class="c1"># dirty hack to get rid of stupid legend title</span>
+    <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;legend&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">sns_plot</span> <span class="o">=</span> <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;I_d&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df</span><span class="p">,</span>
+                            <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="n">history_df_r</span> <span class="o">=</span> <span class="n">history_df</span><span class="p">[</span><span class="n">history_df</span><span class="p">[</span><span class="s2">&quot;policy_name&quot;</span><span class="p">]</span>
+                              <span class="o">!=</span> <span class="s2">&quot;Czech Republic (scaled down)&quot;</span><span class="p">]</span>
+
+    <span class="c1"># dirty hack (ro)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">40</span><span class="p">))</span>
+<span class="c1">#    axs[0].set(xlim=(1, 150))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;all detected states&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;detected - active cases&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">36</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">66</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">97</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">)</span>
+
+    <span class="n">sns_plot2</span> <span class="o">=</span> <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df_r</span><span class="p">,</span>
+                             <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="c1"># dirty hack (ro)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">150</span><span class="p">))</span>
+ <span class="c1">#   axs[1].set(xlim=(1, 150))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;all infected states&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;all active cases&quot;</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df_r</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">plotall</span><span class="p">:</span>
+        <span class="n">sns_plot3</span> <span class="o">=</span> <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;mean_waiting&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df</span><span class="p">,</span>
+                                 <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">15</span><span class="p">))</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">120</span><span class="p">))</span>
+        <span class="n">axs</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+
+<span class="c1">#        axs[2].set_title(&quot;waiting times&quot;)</span>
+
+    <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;detected_ratio&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df_r</span><span class="p">,</span>
+                 <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">15</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">120</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df_r</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+    <span class="c1">#   axs[3].set_title(&quot;detected_ratio&quot;)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">36</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">66</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">97</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+
+    <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;all_tests&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df</span><span class="p">,</span>
+                 <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>
+                 <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">ylim</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">52</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">120</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+    <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;mean_p_infection&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">history_df_r</span><span class="p">,</span>
+                 <span class="n">hue</span><span class="o">=</span><span class="n">hue</span><span class="p">,</span> <span class="n">estimator</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">,</span> <span class="n">ci</span><span class="o">=</span><span class="s1">&#39;sd&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axs</span><span class="p">[</span><span class="mi">5</span><span class="p">],</span>
+                 <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlim</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">120</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">history_df_r</span><span class="p">[</span><span class="n">hue</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fancybox</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="p">)</span>
+
+    <span class="c1"># sns.lineplot(x=x, y=&quot;nodes_in_quarantine&quot;, data=history_df,</span>
+    <span class="c1">#              hue=hue, estimator=np.mean, ci=&#39;sd&#39;, ax=axs[3], **kwargs)</span>
+    <span class="c1"># sns.lineplot(x=x, y=&quot;contacts_collected&quot;, data=history_df,</span>
+    <span class="c1">#              hue=hue, estimator=np.mean, ci=&#39;sd&#39;, ax=axs[4], **kwargs)</span>
+    <span class="c1"># sns.lineplot(x=x, y=&quot;released_nodes&quot;, data=history_df,</span>
+    <span class="c1">#              hue=hue, estimator=np.mean, ci=&#39;sd&#39;, ax=axs[5], **kwargs)</span>
+    <span class="c1"># axs[3].set(ylim=(0, 200))</span>
+    <span class="c1"># axs[3].set_title(&quot;nodes_in_quarantines&quot;)</span>
+
+    <span class="c1"># axs[4].set(ylim=(0, 50))</span>
+    <span class="c1"># axs[4].set_title(&quot;contacts_collected&quot;)</span>
+
+    <span class="c1"># axs[5].set(ylim=(0, 50))</span>
+    <span class="c1"># axs[5].set_title(&quot;released_nodes&quot;)</span>
+
+    <span class="c1">#    sns.lineplot(x=x, y=&quot;&quot;, data=history_df,</span>
+    <span class="c1">#                 hue=hue, estimator=np.median, ci=&#39;sd&#39;, ax=axs[3], **kwargs)</span>
+    <span class="c1">#    axs[3].set(ylim=(0, 15))</span>
+    <span class="c1">#    axs[3].set_title(&quot;waiting times&quot;)</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    sns.lineplot(x=x, y=&quot;tests_ratio&quot;, data=history_df,</span>
+<span class="sd">                 hue=hue, estimator=np.median, ci=&#39;sd&#39;, ax=axs[3], **kwargs)</span>
+<span class="sd">    sns.lineplot(x=x, y=&quot;tests_ratio_to_s&quot;, data=history_df,</span>
+<span class="sd">                 hue=hue, estimator=np.median, ci=&#39;sd&#39;, ax=axs[3], **kwargs)</span>
+<span class="sd">    axs[3].set_title(&quot;tests ratio to all infected, symptomatic infected&quot;)</span>
+<span class="sd">    axs[3].set(ylim=(0, None))</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="n">save_path</span><span class="p">)</span>
+
+<span class="c1">#    plt.show()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_history_with_fname</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">group_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">group_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;max&quot;</span><span class="p">,</span> <span class="n">policy_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                        <span class="n">keep_only_all</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">max_days</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a history CSV and enrich it with metadata columns.</span>
+
+<span class="sd">    Reads the history file via :func:`_load_history`, optionally restricts</span>
+<span class="sd">    columns to ``[&quot;day&quot;, &quot;all_infectious&quot;]``, applies temporal bucketing, and</span>
+<span class="sd">    inserts ``filename`` (and optionally ``policy_name``) as new columns.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the simulation output CSV file.</span>
+<span class="sd">        group_days (int, optional): If set to a positive integer, rows are</span>
+<span class="sd">            bucketed into intervals of this many days and aggregated using</span>
+<span class="sd">            ``group_func``. Defaults to ``None`` (no grouping).</span>
+<span class="sd">        group_func (str, optional): Pandas aggregation function applied within</span>
+<span class="sd">            each day bucket. Defaults to ``&quot;max&quot;``.</span>
+<span class="sd">        policy_name (str, optional): If provided, a ``policy_name`` column is</span>
+<span class="sd">            added to the resulting DataFrame. Defaults to ``None``.</span>
+<span class="sd">        keep_only_all (bool, optional): If ``True``, all columns except</span>
+<span class="sd">            ``&quot;day&quot;`` and ``&quot;all_infectious&quot;`` are dropped before grouping.</span>
+<span class="sd">            Defaults to ``False``.</span>
+<span class="sd">        max_days (int, optional): Maximum number of rows to retain (passed to</span>
+<span class="sd">            :func:`_load_history`). Defaults to ``None``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pandas.DataFrame: Processed history DataFrame with at minimum the</span>
+<span class="sd">        columns ``&quot;filename&quot;``, ``&quot;day&quot;``, and ``&quot;all_infectious&quot;``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">_load_history</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">max_days</span><span class="o">=</span><span class="n">max_days</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">keep_only_all</span><span class="p">:</span>
+        <span class="n">history</span> <span class="o">=</span> <span class="n">history</span><span class="p">[[</span><span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="s2">&quot;all_infectious&quot;</span><span class="p">]]</span>
+
+    <span class="k">if</span> <span class="n">group_days</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">group_days</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">//</span> <span class="n">group_days</span> <span class="o">*</span> <span class="n">group_days</span>
+        <span class="n">history</span> <span class="o">=</span> <span class="n">history</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span>
+            <span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="n">as_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">func</span><span class="o">=</span><span class="n">group_func</span><span class="p">)</span>
+
+    <span class="n">history</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;filename&quot;</span><span class="p">,</span> <span class="n">filename</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">policy_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;policy_name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">policy_name</span>
+    <span class="k">return</span> <span class="n">history</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_load_history</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">max_days</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load and pre-process a simulation history CSV into a DataFrame.</span>
+
+<span class="sd">    Reads the CSV, computes derived aggregate columns (e.g.,</span>
+<span class="sd">    ``all_infectious``, ``I_d``, ``all_tests``, ``detected_ratio``,</span>
+<span class="sd">    ``tests_ratio``, ``mean_waiting``, ``nodes_in_quarantine``,</span>
+<span class="sd">    ``released_nodes``, ``contacts_collected``), and ensures a ``&quot;day&quot;``</span>
+<span class="sd">    column is always present.</span>
+
+<span class="sd">    Derivations are performed only when an ``&quot;E&quot;`` column is present in the</span>
+<span class="sd">    CSV (indicating a full SEIR-type output format). For simpler outputs,</span>
+<span class="sd">    several columns are filled with zeros so downstream code can always</span>
+<span class="sd">    reference them.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the simulation output CSV file. Lines</span>
+<span class="sd">            starting with ``&#39;#&#39;`` are treated as comments and skipped.</span>
+<span class="sd">        max_days (int, optional): If set, truncates the DataFrame to the</span>
+<span class="sd">            first ``max_days`` rows after loading. Defaults to ``None``</span>
+<span class="sd">            (no truncation).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pandas.DataFrame: Pre-processed history with derived aggregate columns</span>
+<span class="sd">        added. A ``&quot;day&quot;`` column is guaranteed to exist (falls back to a</span>
+<span class="sd">        sequential integer range if not present in the source file).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+    <span class="n">history</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">comment</span><span class="o">=</span><span class="s2">&quot;#&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;E&quot;</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+
+        <span class="n">all_infectious</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">s</span>
+            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="p">[</span>
+                <span class="s2">&quot;I_n&quot;</span><span class="p">,</span> <span class="s2">&quot;I_a&quot;</span><span class="p">,</span> <span class="s2">&quot;I_s&quot;</span><span class="p">,</span> <span class="s2">&quot;E&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;I_dn&quot;</span><span class="p">,</span> <span class="s2">&quot;I_da&quot;</span><span class="p">,</span> <span class="s2">&quot;I_ds&quot;</span><span class="p">,</span> <span class="s2">&quot;E_d&quot;</span><span class="p">,</span> <span class="s2">&quot;J_ds&quot;</span><span class="p">,</span> <span class="s2">&quot;J_dn&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;J_n&quot;</span><span class="p">,</span> <span class="s2">&quot;J_s&quot;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span>
+        <span class="p">]</span>
+
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="n">all_infectious</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;I_d&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[[</span>
+                <span class="s2">&quot;I_dn&quot;</span><span class="p">,</span> <span class="s2">&quot;I_da&quot;</span><span class="p">,</span> <span class="s2">&quot;I_ds&quot;</span><span class="p">,</span> <span class="s2">&quot;E_d&quot;</span><span class="p">,</span> <span class="s2">&quot;J_ds&quot;</span><span class="p">,</span> <span class="s2">&quot;J_dn&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_tests&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[[</span>
+                <span class="s2">&quot;tests&quot;</span><span class="p">,</span> <span class="s2">&quot;quarantine_tests&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+                
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;detected_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;I_d&quot;</span><span class="p">]</span>
+            
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;tests_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;tests&quot;</span><span class="p">]</span> <span class="o">/</span> \
+                                     <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_infectious&quot;</span><span class="p">]</span>
+                
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_s&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[[</span>
+                <span class="s2">&quot;I_s&quot;</span><span class="p">,</span> <span class="s2">&quot;I_ds&quot;</span><span class="p">,</span> <span class="s2">&quot;J_s&quot;</span><span class="p">,</span> <span class="s2">&quot;J_ds&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;tests_ratio_to_s&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;tests&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_s&quot;</span><span class="p">]</span>
+                
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;mean_waiting&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="s2">&quot;sum_of_waiting&quot;</span><span class="p">]</span> <span class="o">/</span> \
+                                      <span class="n">history</span><span class="p">[</span><span class="s2">&quot;all_positive_tests&quot;</span><span class="p">]</span>
+                
+            <span class="n">selected_cols</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">col</span>
+                <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span>
+                <span class="k">if</span> <span class="s2">&quot;nodes_in_quarantine&quot;</span> <span class="ow">in</span> <span class="n">col</span>
+            <span class="p">]</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;nodes_in_quarantine&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="n">selected_cols</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">selected_cols</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">col</span>
+                <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span>
+                <span class="k">if</span> <span class="s2">&quot;released_nodes&quot;</span> <span class="ow">in</span> <span class="n">col</span>
+            <span class="p">]</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;released_nodes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="n">selected_cols</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">selected_cols</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">col</span>
+                <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span>
+                <span class="k">if</span> <span class="s2">&quot;contacts_collected&quot;</span> <span class="ow">in</span> <span class="n">col</span>
+            <span class="p">]</span>
+            <span class="n">history</span><span class="p">[</span><span class="s2">&quot;contacts_collected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">history</span><span class="p">[</span><span class="n">selected_cols</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Warning something is missing in data frame&quot;</span><span class="p">)</span>
+            
+
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;nodes_in_quarantine&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;released_nodes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;contacts_collected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;mean_p_infection&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">if</span> <span class="n">max_days</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">history</span> <span class="o">=</span> <span class="n">history</span><span class="p">[:</span><span class="n">max_days</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;day&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">history</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">history</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">history</span><span class="p">))</span>
+<span class="c1">#    print(history)</span>
+    <span class="k">return</span> <span class="n">history</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+
+    <span class="n">history</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span>
+        <span class="s2">&quot;../result_storage/tmp/history_seirsplus_quarantine_1.csv&quot;</span><span class="p">)</span>
+    <span class="n">plot_history</span><span class="p">(</span><span class="n">history</span><span class="p">)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

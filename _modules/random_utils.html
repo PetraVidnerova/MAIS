@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>random_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>random_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for random_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Random number generation utilities for the MAIS simulation.</span>
+
+<span class="sd">This module provides helpers for reproducible random sampling, ordered-tuple</span>
+<span class="sd">generation, and discrete duration sampling. It is used across the simulation</span>
+<span class="sd">to draw stochastic values for disease progression durations and other</span>
+<span class="sd">time-varying random quantities.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">numpy.random</span><span class="w"> </span><span class="kn">import</span> <span class="n">Generator</span><span class="p">,</span> <span class="n">SFC64</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+
+
+<div class="viewcode-block" id="RandomGenerator">
+<a class="viewcode-back" href="../src_modules.html#random_utils.RandomGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RandomGenerator</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Seeded pseudo-random number generator wrapper using the SFC64 bit generator.</span>
+
+<span class="sd">    Wraps NumPy&#39;s ``Generator`` backed by the fast ``SFC64`` bit generator so</span>
+<span class="sd">    that independent, reproducible streams can be attached to different parts</span>
+<span class="sd">    of the model.</span>
+
+<span class="sd">    Note:</span>
+<span class="sd">        Adding per-component generators is still in progress.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        seed (int): Integer seed passed to ``SFC64`` for reproducibility.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># add own generators to individual parts of a model (in progress)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">seed</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rng</span> <span class="o">=</span> <span class="n">Generator</span><span class="p">(</span><span class="n">SFC64</span><span class="p">(</span><span class="n">seed</span><span class="p">))</span>
+
+<div class="viewcode-block" id="RandomGenerator.rand">
+<a class="viewcode-back" href="../src_modules.html#random_utils.RandomGenerator.rand">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">rand</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate ``n`` uniformly distributed random floats in ``[0, 1)``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            n (int): Number of random values to generate.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of shape ``(n,)`` with values in ``[0, 1)``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="n">n</span><span class="p">)</span></div>
+</div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_random_from_probs</span><span class="p">(</span><span class="n">what</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">n</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Draw ``n`` random samples from ``what`` according to probabilities ``p``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        what (int or array-like): If an integer, samples are drawn from</span>
+<span class="sd">            ``range(what)``. Otherwise samples are drawn from the provided</span>
+<span class="sd">            sequence.</span>
+<span class="sd">        p (array-like): Probability weights for each element of ``what``.</span>
+<span class="sd">            Must sum to 1.</span>
+<span class="sd">        n (int, optional): Number of samples to draw. Defaults to ``1``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Array of ``n`` sampled values.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">what</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_check_sorted</span><span class="p">(</span><span class="n">value_list</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Check that corresponding elements across a list of arrays are strictly increasing.</span>
+
+<span class="sd">    Given arrays ``[x1, x2, ..., xn]`` (each of the same shape), verifies</span>
+<span class="sd">    element-wise that ``x1[i] &lt; x2[i] &lt; ... &lt; xn[i]`` for every index ``i``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        value_list (list of numpy.ndarray): Ordered list of arrays to compare</span>
+<span class="sd">            pairwise. All arrays must have the same shape.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Boolean array of the same shape as each input array.</span>
+<span class="sd">        ``True`` at position ``i`` means all consecutive pairs satisfy the</span>
+<span class="sd">        strict ordering at that position; ``False`` indicates a violation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># print()</span>
+    <span class="c1"># print(value_list)</span>
+    <span class="c1"># print()</span>
+    <span class="n">partial_results_list</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">atleast_1d</span><span class="p">(</span><span class="n">x</span> <span class="o">&lt;</span> <span class="n">y</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value_list</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">value_list</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+    <span class="p">]</span>
+    <span class="c1">#    print()</span>
+
+    <span class="c1">#    print(&quot;partial_results_list&quot;, partial_results_list, len(partial_results_list))</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">partial_results_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span><span class="o">*</span><span class="n">partial_results_list</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">partial_results_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="gen_tuple1">
+<a class="viewcode-back" href="../src_modules.html#random_utils.gen_tuple1">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">gen_tuple1</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate an ``n``-tuple of random values satisfying a strict ordering.</span>
+
+<span class="sd">    Draws values ``(r_1, r_2, ..., r_n)`` such that ``r_1 &lt; r_2 &lt; ... &lt; r_n``</span>
+<span class="sd">    element-wise across a batch of size ``shape``. Any positions that violate</span>
+<span class="sd">    the ordering are resampled repeatedly until all positions satisfy the</span>
+<span class="sd">    constraint.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        n (int): Number of elements in the tuple. Must equal ``len(args)``.</span>
+<span class="sd">        shape (int or tuple): Shape of the batch to generate (passed as ``n``</span>
+<span class="sd">            argument to each generator&#39;s ``get`` method).</span>
+<span class="sd">        *args: Exactly ``n`` random duration generator objects, each exposing</span>
+<span class="sd">            a ``get(n=...)`` method that returns a NumPy array of samples.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list of numpy.ndarray: List of ``n`` arrays, each of shape ``shape``,</span>
+<span class="sd">        satisfying ``result[0] &lt; result[1] &lt; ... &lt; result[n-1]``</span>
+<span class="sd">        element-wise.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">         &gt;&gt;&gt; gen_tuple(3, rng1, rng2, rng3)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_gen</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+            <span class="n">result</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">s</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">result</span>
+
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="o">==</span> <span class="n">n</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">_gen</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="n">check</span> <span class="o">=</span> <span class="n">_check_sorted</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+    <span class="k">while</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">check</span><span class="p">):</span>
+        <span class="n">loggin</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;gen_tuple: condition no satisfied, repairing&quot;</span><span class="p">)</span>
+        <span class="n">indices_to_fix</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">check</span> <span class="o">==</span> <span class="kc">False</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">new_values</span> <span class="o">=</span> <span class="n">_gen</span><span class="p">(</span><span class="n">indices_to_fix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>  <span class="c1"># list of length n again</span>
+        <span class="c1"># but with shorter items</span>
+
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+            <span class="n">result</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">indices_to_fix</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">check</span> <span class="o">=</span> <span class="n">_check_sorted</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="gen_tuple2">
+<a class="viewcode-back" href="../src_modules.html#random_utils.gen_tuple2">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">gen_tuple2</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate an ``n``-tuple of random values satisfying a strict ordering (clipping variant).</span>
+
+<span class="sd">    Draws values ``(r_1, r_2, ..., r_n)`` such that ``r_1 &lt; r_2 &lt; ... &lt; r_n``</span>
+<span class="sd">    element-wise across a batch of size ``shape``. Unlike :func:`gen_tuple1`,</span>
+<span class="sd">    ordering is enforced by clipping each subsequent value to be at least</span>
+<span class="sd">    ``previous + 1`` rather than by resampling.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        n (int): Number of elements in the tuple. Must equal ``len(args)``.</span>
+<span class="sd">        shape (int or tuple): Shape of the batch to generate (passed as ``n``</span>
+<span class="sd">            argument to each generator&#39;s ``get`` method).</span>
+<span class="sd">        *args: Exactly ``n`` random duration generator objects, each exposing</span>
+<span class="sd">            a ``get(n=...)`` method that returns a NumPy array of samples.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list of numpy.ndarray: List of ``n`` arrays, each of shape ``shape``,</span>
+<span class="sd">        satisfying ``result[0] &lt; result[1] &lt; ... &lt; result[n-1]``</span>
+<span class="sd">        element-wise.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">         &gt;&gt;&gt; gen_tuple(3, rng1, rng2, rng3)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">shape</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="n">i</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">result</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="gen_tuple">
+<a class="viewcode-back" href="../src_modules.html#random_utils.gen_tuple">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">gen_tuple</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate an ``n``-tuple of strictly ordered random values.</span>
+
+<span class="sd">    Delegates to :func:`gen_tuple2`. See that function for full documentation.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        n (int): Number of elements in the tuple.</span>
+<span class="sd">        shape (int or tuple): Shape of the batch to generate.</span>
+<span class="sd">        *args: Exactly ``n`` random duration generator objects.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list of numpy.ndarray: List of ``n`` strictly ordered arrays.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">gen_tuple2</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="RandomDuration">
+<a class="viewcode-back" href="../src_modules.html#random_utils.RandomDuration">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RandomDuration</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Discrete random duration sampler driven by a full probability distribution.</span>
+
+<span class="sd">    Intended for generating the time (in discrete steps, e.g. days) that an</span>
+<span class="sd">    agent spends in a particular disease state. The distribution is specified</span>
+<span class="sd">    as a probability mass function (PMF) over non-negative integer durations</span>
+<span class="sd">    starting from zero.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        probs (array-like): NumPy array of probabilities for durations</span>
+<span class="sd">            ``0, 1, 2, ..., len(probs)-1``. Values must be non-negative and</span>
+<span class="sd">            sum to 1.</span>
+<span class="sd">        precompute (bool, optional): If ``True``, a large buffer of ``10^6``</span>
+<span class="sd">            pre-drawn samples is generated at construction time. Currently the</span>
+<span class="sd">            buffer is not stored, so this flag has no effect on subsequent</span>
+<span class="sd">            ``get`` calls. Defaults to ``False``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">probs</span><span class="p">,</span> <span class="n">precompute</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">probs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">probs</span> <span class="o">=</span> <span class="n">probs</span>
+
+        <span class="k">if</span> <span class="n">precompute</span><span class="p">:</span>
+            <span class="n">buf</span> <span class="o">=</span> <span class="n">_random_from_probs</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">probs</span><span class="p">,</span> <span class="mi">10</span><span class="o">**</span><span class="mi">6</span><span class="p">)</span>
+
+<div class="viewcode-block" id="RandomDuration.get">
+<a class="viewcode-back" href="../src_modules.html#random_utils.RandomDuration.get">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Draw ``n`` random duration values from the distribution.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            n (int, optional): Number of samples to draw. Defaults to ``1``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of ``n`` integer duration values drawn</span>
+<span class="sd">            according to ``self.probs``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">_random_from_probs</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">probs</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">values</span></div>
+</div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+
+    <span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">uncumulate</span><span class="p">(</span><span class="n">l</span><span class="p">):</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span>
+               <span class="k">for</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">l</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="n">l</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+               <span class="p">]</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>
+        <span class="n">res</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+=</span> <span class="mf">1.0</span><span class="o">-</span><span class="n">s</span>
+        <span class="k">return</span> <span class="n">res</span>
+
+    <span class="n">cdf_incubation</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.002079467</span><span class="p">,</span> <span class="mf">0.045532967</span><span class="p">,</span> <span class="mf">0.158206035</span><span class="p">,</span> <span class="mf">0.303711753</span><span class="p">,</span> <span class="mf">0.446245776</span><span class="p">,</span> <span class="mf">0.569141375</span><span class="p">,</span> <span class="mf">0.668484586</span><span class="p">,</span>
+                      <span class="mf">0.746107988</span><span class="p">,</span> <span class="mf">0.805692525</span><span class="p">,</span> <span class="mf">0.851037774</span><span class="p">,</span> <span class="mf">0.885435436</span><span class="p">,</span> <span class="mf">0.911529759</span><span class="p">,</span> <span class="mf">0.931365997</span><span class="p">,</span> <span class="mf">0.946495014</span><span class="p">,</span>
+                      <span class="mf">0.958080947</span><span class="p">,</span> <span class="mf">0.966993762</span><span class="p">,</span> <span class="mf">0.973882948</span><span class="p">,</span> <span class="mf">0.979233968</span><span class="p">,</span> <span class="mf">0.983410614</span><span class="p">,</span> <span class="mf">0.986686454</span><span class="p">,</span> <span class="mf">0.98926803</span><span class="p">,</span>
+                      <span class="mf">0.991311965</span><span class="p">,</span> <span class="mf">0.992937571</span><span class="p">,</span> <span class="mf">0.994236158</span><span class="p">,</span> <span class="mf">0.995277934</span><span class="p">,</span> <span class="mf">0.996117131</span><span class="p">,</span> <span class="mf">0.996795835</span><span class="p">,</span> <span class="mf">0.997346849</span><span class="p">,</span>
+                      <span class="mf">0.997795859</span><span class="p">,</span> <span class="mf">0.998163058</span><span class="p">,</span> <span class="mf">0.998464392</span><span class="p">,</span> <span class="mf">0.998712499</span><span class="p">,</span> <span class="mf">0.998917441</span><span class="p">,</span> <span class="mf">0.999087255</span><span class="p">,</span> <span class="mf">0.999228384</span><span class="p">,</span>
+                      <span class="mf">0.999346016</span><span class="p">,</span> <span class="mf">0.999444337</span><span class="p">,</span> <span class="mf">0.999526742</span><span class="p">,</span> <span class="mf">0.999595989</span><span class="p">,</span> <span class="mf">0.999654327</span><span class="p">]</span>
+    <span class="n">p_incubation</span> <span class="o">=</span> <span class="n">uncumulate</span><span class="p">(</span><span class="n">cdf_incubation</span><span class="p">)</span>
+
+    <span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">values2</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">durations</span> <span class="o">=</span> <span class="n">RandomDuration</span><span class="p">(</span><span class="n">p_incubation</span><span class="p">)</span>
+    <span class="n">pre_durations</span> <span class="o">=</span> <span class="n">RandomDuration</span><span class="p">(</span><span class="n">p_incubation</span><span class="p">,</span> <span class="n">precompute</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10000</span><span class="p">):</span>
+
+        <span class="n">values</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">durations</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="mi">100</span><span class="p">))</span>
+        <span class="n">values2</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">durations</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="mi">100</span><span class="p">))</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">values</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">values</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">values2</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">values2</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">values</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">values2</span><span class="p">))</span>
+    <span class="n">max_value</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">values</span> <span class="o">+</span> <span class="n">values2</span><span class="p">)</span>
+    <span class="n">min_value</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">values</span> <span class="o">+</span> <span class="n">values2</span><span class="p">)</span>
+
+    <span class="n">fig</span><span class="p">,</span> <span class="n">axs</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">nrows</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;pink&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onfly&quot;</span><span class="p">,</span>
+                <span class="n">bins</span><span class="o">=</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">values2</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;precomputed&quot;</span><span class="p">,</span>
+                <span class="n">bins</span><span class="o">=</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">values2</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;precomputed&quot;</span><span class="p">,</span>
+                <span class="n">bins</span><span class="o">=</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;pink&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onfly&quot;</span><span class="p">,</span>
+                <span class="n">bins</span><span class="o">=</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">min_value</span><span class="p">,</span> <span class="n">max_value</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">axs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+    <span class="n">axs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="s2">&quot;days in E&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Show plot</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>policy_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>policy_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for policy_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Policy and scenario loading utilities for the MAIS simulation.</span>
+
+<span class="sd">This module provides functions for loading simulation scenario definitions</span>
+<span class="sd">from CSV files and converting them to dictionaries that can drive per-day</span>
+<span class="sd">policy changes (such as contact-layer weight adjustments) during a run.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">click</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+
+<div class="viewcode-block" id="load_scenario_dict">
+<a class="viewcode-back" href="../src_modules.html#policy_utils.load_scenario_dict">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_scenario_dict</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">sep</span><span class="o">=</span><span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="n">return_data</span><span class="o">=</span><span class="s1">&#39;list&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a scenario definition from a CSV file and return it as a dictionary.</span>
+
+<span class="sd">    The CSV file is expected to have at minimum an ``id`` column, a ``name``</span>
+<span class="sd">    column, and one or more numeric day-columns. Each day-column represents a</span>
+<span class="sd">    particular simulation day, and the rows represent the layers (or other</span>
+<span class="sd">    entities) whose weights/values are being specified for that day.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the CSV file to read.</span>
+<span class="sd">        sep (str, optional): Column delimiter used in the CSV file.</span>
+<span class="sd">            Defaults to ``&#39;,&#39;``.</span>
+<span class="sd">        return_data (str, optional): Format for the per-day values:</span>
+
+<span class="sd">            - ``&#39;list&#39;``: Each day maps to a plain Python list of values</span>
+<span class="sd">              ordered by row.</span>
+<span class="sd">            - ``&#39;names&#39;``: Each day maps to a ``{name: value}`` dictionary</span>
+<span class="sd">              keyed by the ``name`` column.</span>
+<span class="sd">            - ``&#39;ids&#39;``: Each day maps to a ``{name: value}`` dictionary</span>
+<span class="sd">              keyed by the ``name`` column (same as ``&#39;names&#39;`` in current</span>
+<span class="sd">              implementation).</span>
+
+<span class="sd">            Defaults to ``&#39;list&#39;``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Mapping of ``{day (int): output}`` where ``output`` is</span>
+<span class="sd">        formatted according to ``return_data``.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If ``return_data`` is not one of ``&#39;list&#39;``,</span>
+<span class="sd">            ``&#39;names&#39;``, or ``&#39;ids&#39;``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">sep</span><span class="o">=</span><span class="n">sep</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_output</span><span class="p">(</span><span class="n">series</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">):</span>
+        <span class="n">l</span> <span class="o">=</span> <span class="n">series</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">return_data</span> <span class="o">==</span> <span class="s1">&#39;list&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">l</span>
+        <span class="k">elif</span> <span class="n">return_data</span> <span class="o">==</span> <span class="s1">&#39;names&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">],</span> <span class="n">l</span><span class="p">)}</span>
+        <span class="k">elif</span> <span class="n">return_data</span> <span class="o">==</span> <span class="s1">&#39;ids&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">],</span> <span class="n">l</span><span class="p">)}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported format: </span><span class="si">{</span><span class="n">return_data</span><span class="si">}</span><span class="s2">, valid options are &#39;list&#39;, &#39;names&#39;, &#39;ids&#39;.&quot;</span><span class="p">)</span>
+
+    <span class="n">data_only</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">,</span> <span class="s1">&#39;name&#39;</span><span class="p">])</span>
+    <span class="k">return</span> <span class="p">{</span><span class="nb">int</span><span class="p">(</span><span class="n">k</span><span class="p">):</span> <span class="n">get_output</span><span class="p">(</span><span class="n">data_only</span><span class="p">[</span><span class="n">k</span><span class="p">])</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">data_only</span><span class="o">.</span><span class="n">columns</span><span class="p">}</span></div>
+
+
+
+<span class="nd">@click</span><span class="o">.</span><span class="n">command</span><span class="p">()</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;filename&#39;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--out_path&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--sep&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--return_data&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;list&#39;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">out_path</span><span class="p">,</span> <span class="n">sep</span><span class="p">,</span> <span class="n">return_data</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;CLI entry point: load a scenario CSV and optionally serialise it.</span>
+
+<span class="sd">    Reads the scenario defined in ``filename``, prints the resulting</span>
+<span class="sd">    dictionary to stdout, and if ``--out_path`` is provided, serialises the</span>
+<span class="sd">    dictionary to that path using :mod:`pickle`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Path to the scenario CSV file (positional argument).</span>
+<span class="sd">        out_path (str or None): Optional file path for the pickled output.</span>
+<span class="sd">            Defaults to ``None`` (no file written).</span>
+<span class="sd">        sep (str): Column delimiter for the CSV. Defaults to ``&#39;,&#39;``.</span>
+<span class="sd">        return_data (str): Output format passed to</span>
+<span class="sd">            :func:`load_scenario_dict`. Defaults to ``&#39;list&#39;``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">out_dict</span> <span class="o">=</span> <span class="n">load_scenario_dict</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">sep</span><span class="o">=</span><span class="n">sep</span><span class="p">,</span> <span class="n">return_data</span><span class="o">=</span><span class="n">return_data</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">out_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">out_path</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">of</span><span class="p">:</span>
+            <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">out_dict</span><span class="p">,</span> <span class="n">of</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">out_dict</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run</span><span class="p">()</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

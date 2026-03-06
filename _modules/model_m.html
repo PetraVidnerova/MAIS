@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>model_m &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>model_m</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for model_m</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Model-M wrapper and graph loading utilities for the MAIS epidemic simulator.</span>
+
+<span class="sd">This module provides:</span>
+
+<span class="sd">* ``ModelM`` – a high-level wrapper around the low-level epidemic models</span>
+<span class="sd">  (selected via ``model_zoo``).  It manages graph copying, adjacency-matrix</span>
+<span class="sd">  initialisation, policy attachment, and multi-run resets.</span>
+<span class="sd">* ``load_model_from_config`` – convenience factory that builds a ``ModelM``</span>
+<span class="sd">  instance from a ``ConfigFile`` object.</span>
+<span class="sd">* ``load_graph`` / ``save_graph`` – helpers for constructing or persisting</span>
+<span class="sd">  graph objects.</span>
+<span class="sd">* ``_load_policy_function`` – internal helper that dynamically imports and</span>
+<span class="sd">  configures the policy class named in the config file.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">pickle</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+
+<span class="kn">from</span> <span class="nn">graphs.graph_gen</span> <span class="kn">import</span> <span class="n">GraphGenerator</span><span class="p">,</span> <span class="n">CSVGraphGenerator</span><span class="p">,</span> <span class="n">RandomSingleGraphGenerator</span>
+<span class="kn">from</span> <span class="nn">graphs.light</span> <span class="kn">import</span> <span class="n">LightGraph</span>
+<span class="kn">from</span> <span class="nn">graphs.simple</span> <span class="kn">import</span> <span class="n">SimpleGraph</span>
+<span class="kn">from</span> <span class="nn">models.model_zoo</span> <span class="kn">import</span> <span class="n">model_zoo</span>
+<span class="kn">from</span> <span class="nn">models.states</span> <span class="kn">import</span> <span class="n">STATES</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+
+
+<div class="viewcode-block" id="load_model_from_config">
+<a class="viewcode-back" href="../src_modules.html#model_m.load_model_from_config">[docs]</a>
+<span class="k">def</span> <span class="nf">load_model_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="p">,</span> <span class="n">preloaded_graph</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">hyperparams</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct a ``ModelM`` instance from a loaded ``ConfigFile``.</span>
+
+<span class="sd">    Reads model parameters, graph specification, policy definition, and</span>
+<span class="sd">    scenario from the supplied config, then assembles and returns a</span>
+<span class="sd">    ``ModelM`` object (not yet run).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cf (ConfigFile): Loaded configuration object containing at least</span>
+<span class="sd">            ``[MODEL]``, ``[GRAPH]``, and ``[TASK]`` sections.</span>
+<span class="sd">        model_random_seed (int): Random seed to pass to the underlying model.</span>
+<span class="sd">        preloaded_graph: A pre-built graph object.  When provided, graph</span>
+<span class="sd">            loading from config is skipped.  Defaults to ``None``.</span>
+<span class="sd">        hyperparams (dict or None): Additional model parameters that override</span>
+<span class="sd">            values from ``[MODEL]``.  Defaults to ``None``.</span>
+<span class="sd">        policy_params (dict or None): Additional policy constructor parameters</span>
+<span class="sd">            that override values from ``[POLICY_SETUP]``.  Defaults to</span>
+<span class="sd">            ``None``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        ModelM: A freshly constructed (but not yet set up or run) model</span>
+<span class="sd">        instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># load model hyperparameters</span>
+    <span class="n">model_params</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;MODEL&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">hyperparams</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model_params</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">model_params</span><span class="p">,</span> <span class="o">**</span><span class="n">hyperparams</span><span class="p">}</span>
+
+    <span class="c1"># load graph as described in config file</span>
+    <span class="k">if</span> <span class="n">preloaded_graph</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">preloaded_graph</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">load_graph</span><span class="p">(</span><span class="n">cf</span><span class="p">)</span>
+
+    <span class="c1">#  policy</span>
+    <span class="n">policy</span> <span class="o">=</span> <span class="n">_load_policy_function</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="n">policy_params</span><span class="p">)</span>
+
+    <span class="c1"># sceanario</span>
+    <span class="n">scenario</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;SCENARIO&quot;</span><span class="p">)</span>
+    <span class="n">scenario</span> <span class="o">=</span> <span class="n">scenario</span><span class="p">[</span><span class="s2">&quot;closed&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">scenario</span> <span class="k">else</span> <span class="kc">None</span>
+
+    <span class="c1"># model type</span>
+    <span class="n">model_type</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+        <span class="s2">&quot;model&quot;</span><span class="p">,</span> <span class="s2">&quot;SimulationDrivenModel&quot;</span><span class="p">)</span>
+
+    <span class="n">model</span> <span class="o">=</span> <span class="n">ModelM</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span>
+                   <span class="n">policy</span><span class="p">,</span>
+                   <span class="n">model_params</span><span class="p">,</span>
+                   <span class="n">scenario</span><span class="p">,</span>
+                   <span class="n">random_seed</span><span class="o">=</span><span class="n">model_random_seed</span><span class="p">,</span>
+                   <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span>
+                   <span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+
+
+
+<div class="viewcode-block" id="ModelM">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM">[docs]</a>
+<span class="k">class</span> <span class="nc">ModelM</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;High-level wrapper around a MAIS epidemic simulation model.</span>
+
+<span class="sd">    ``ModelM`` acts as a facade that combines a contact graph, an optional</span>
+<span class="sd">    non-pharmaceutical intervention policy, epidemic model parameters, and a</span>
+<span class="sd">    layer-closure scenario into a single object with a simple</span>
+<span class="sd">    ``run`` / ``reset`` / ``duplicate`` interface.</span>
+
+<span class="sd">    The underlying low-level model is instantiated lazily (on the first call to</span>
+<span class="sd">    ``run`` or ``reset``) via ``setup()``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: A graph object (``LightGraph``, ``SimpleGraph``, or</span>
+<span class="sd">            ``GraphGenerator`` subclass) describing the contact network.  A</span>
+<span class="sd">            working copy is created for each simulation run.</span>
+<span class="sd">        policy: A two-element tuple ``(PolicyClass, setup_dict)`` where</span>
+<span class="sd">            ``PolicyClass`` is the policy constructor and ``setup_dict``</span>
+<span class="sd">            contains keyword arguments for it.  Either element may be</span>
+<span class="sd">            ``None`` to run without a policy.</span>
+<span class="sd">        model_params (dict or None): Epidemic model parameters forwarded to</span>
+<span class="sd">            the low-level model constructor.  Defaults to ``None``.</span>
+<span class="sd">        scenario (list or None): List of layer names to close before building</span>
+<span class="sd">            the adjacency matrix.  Only meaningful for ``GraphGenerator``</span>
+<span class="sd">            graphs.  Defaults to ``None``.</span>
+<span class="sd">        model_type (str): Key into ``model_zoo`` selecting the low-level model</span>
+<span class="sd">            class.  Defaults to ``&#39;SimulationDrivenModel&#39;``.</span>
+<span class="sd">        random_seed (int): Initial random seed passed to the underlying model.</span>
+<span class="sd">            Defaults to ``42``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">graph</span><span class="p">,</span>
+                 <span class="n">policy</span><span class="p">,</span>
+                 <span class="n">model_params</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                 <span class="n">scenario</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                 <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;SimulationDrivenModel&quot;</span><span class="p">,</span>
+                 <span class="n">random_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">):</span>
+
+        <span class="c1"># self.random_seed = 42</span>
+
+        <span class="c1"># original state</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_graph</span> <span class="o">=</span> <span class="n">graph</span>
+
+        <span class="c1"># scenario (list of closed layers)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scenario</span> <span class="o">=</span> <span class="n">scenario</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span> <span class="o">=</span> <span class="n">model_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model_params</span> <span class="o">=</span> <span class="n">model_params</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span> <span class="o">=</span> <span class="n">random_seed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">policy</span> <span class="o">=</span> <span class="n">policy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ready</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="ModelM.setup">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.setup">[docs]</a>
+    <span class="k">def</span> <span class="nf">setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the model for a fresh simulation run.</span>
+
+<span class="sd">        Creates a working copy of the graph, builds the adjacency matrix,</span>
+<span class="sd">        instantiates the low-level epidemic model and (if configured) the</span>
+<span class="sd">        policy object.  Sets ``self.ready = True`` when complete.</span>
+
+<span class="sd">        Any previously allocated graph, adjacency matrix, model, or policy</span>
+<span class="sd">        objects are deleted before re-initialisation to free memory.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;model setup&quot;</span><span class="p">)</span>
+        <span class="c1"># working copy of graph and matrix</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_graph</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_matrix</span><span class="p">()</span>
+
+        <span class="c1"># model</span>
+        <span class="n">Model</span> <span class="o">=</span> <span class="n">model_zoo</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model_type</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">Model</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">,</span>
+                           <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">model_params</span><span class="p">,</span>
+                           <span class="n">random_seed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">0</span><span class="p">](</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">set_periodic_update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ready</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="ModelM.duplicate">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.duplicate">[docs]</a>
+    <span class="k">def</span> <span class="nf">duplicate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">hyperparams</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create a shallow copy of this model with optionally overridden settings.</span>
+
+<span class="sd">        Only models that have not yet been set up (``self.ready == False``) can</span>
+<span class="sd">        be duplicated.  The duplicate shares the original ``start_graph``</span>
+<span class="sd">        object but builds its own working graph copy and adjacency matrix.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            random_seed (int or None): Random seed for the duplicate.  If</span>
+<span class="sd">                ``None``, the original seed is reused.</span>
+<span class="sd">            hyperparams (dict or None): Overrides for model parameters.  Merged</span>
+<span class="sd">                on top of the original ``model_params``.</span>
+<span class="sd">            policy_params (dict or None): Overrides for policy constructor</span>
+<span class="sd">                parameters.  Merged on top of the original policy setup dict.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            ModelM: A new ``ModelM`` instance with ``ready = False`` that can</span>
+<span class="sd">            be run independently.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            NotImplementedError: If called on a model that has already been set</span>
+<span class="sd">                up (``self.ready == True``).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1">#        pritn(&quot;DBD duplicate&quot;)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ready</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;We duplicate only newbie models&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">policy_params</span><span class="p">:</span>
+            <span class="n">policy_func</span><span class="p">,</span> <span class="n">policy_setup</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span>
+            <span class="n">policy_setup</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">policy_setup</span><span class="p">,</span> <span class="o">**</span><span class="n">policy_params</span><span class="p">}</span>
+            <span class="n">policy</span> <span class="o">=</span> <span class="n">policy_func</span><span class="p">,</span> <span class="n">policy_setup</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">policy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span>
+
+        <span class="n">twin</span> <span class="o">=</span> <span class="n">ModelM</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_graph</span><span class="p">,</span>
+            <span class="n">policy</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model_params</span> <span class="k">if</span> <span class="n">hyperparams</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">dict</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model_params</span><span class="p">,</span> <span class="o">**</span><span class="n">hyperparams</span><span class="p">),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scenario</span><span class="p">,</span>
+            <span class="n">random_seed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span> <span class="k">if</span> <span class="n">random_seed</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">random_seed</span><span class="p">,</span>
+            <span class="n">model_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model_type</span>
+        <span class="p">)</span>
+        <span class="n">twin</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="n">twin</span><span class="o">.</span><span class="n">start_graph</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">twin</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="n">twin</span><span class="o">.</span><span class="n">init_matrix</span><span class="p">()</span>
+        <span class="n">twin</span><span class="o">.</span><span class="n">ready</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="n">twin</span></div>
+
+
+<div class="viewcode-block" id="ModelM.set_model_params">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.set_model_params">[docs]</a>
+    <span class="k">def</span> <span class="nf">set_model_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update the underlying model&#39;s parameters after construction.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            model_params (dict): Dictionary of parameter names to new values</span>
+<span class="sd">                forwarded to the low-level model&#39;s ``setup_model_params``</span>
+<span class="sd">                method.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">setup_model_params</span><span class="p">(</span><span class="n">model_params</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.run">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the simulation, setting up the model first if necessary.</span>
+
+<span class="sd">        If the model has not been set up yet (``self.ready == False``),</span>
+<span class="sd">        ``setup()`` is called automatically before delegating to the</span>
+<span class="sd">        underlying model&#39;s ``run`` method.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            *args: Positional arguments forwarded to the underlying model&#39;s</span>
+<span class="sd">                ``run`` method (e.g. ``T`` for the number of days).</span>
+<span class="sd">            **kwargs: Keyword arguments forwarded to the underlying model&#39;s</span>
+<span class="sd">                ``run`` method (e.g. ``verbose``, ``print_interval``).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">ready</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">setup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.reset">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.reset">[docs]</a>
+    <span class="k">def</span> <span class="nf">reset</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Reset the model to its initial state for a new simulation run.</span>
+
+<span class="sd">        If the model has never been set up, ``setup()`` is called first.</span>
+<span class="sd">        Otherwise, the working graph and adjacency matrix are recreated from</span>
+<span class="sd">        the original ``start_graph``, the policy object is rebuilt, and the</span>
+<span class="sd">        low-level model&#39;s initialisation routines are re-invoked.</span>
+
+<span class="sd">        The random seed can be overridden at reset time to produce an</span>
+<span class="sd">        independent trajectory.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            random_seed (int or None): New random seed.  If ``None``, the</span>
+<span class="sd">                seed set during construction is retained.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1">#        print(&quot;DBD reset&quot;)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">ready</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">setup</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_graph</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_matrix</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">0</span><span class="p">](</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">policy</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">set_periodic_update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span>
+
+        <span class="c1"># random_seed has to be setup AFTER inicialization and BEFORE states_and_counts_init !</span>
+        <span class="k">if</span> <span class="n">random_seed</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">set_seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;seed changed to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">random_seed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_ext_nodes</span><span class="p">,</span>
+                                          <span class="n">ext_code</span><span class="o">=</span><span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.get_results">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.get_results">[docs]</a>
+    <span class="k">def</span> <span class="nf">get_results</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                    <span class="n">states</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the time-series count(s) for one or more epidemic states.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            states (str or list[str]): A single state name or a list of state</span>
+<span class="sd">                names whose count time-series should be retrieved.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray or list[numpy.ndarray]: A single count array when</span>
+<span class="sd">            ``states`` is a string, or a list of count arrays when ``states``</span>
+<span class="sd">            is a list.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">states</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">get_state_count</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">states</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">get_state_count</span><span class="p">(</span><span class="n">states</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.get_df">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.get_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">get_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return simulation results as a merged pandas DataFrame.</span>
+
+<span class="sd">        The model DataFrame (one row per time step, columns for each epidemic</span>
+<span class="sd">        state) is merged with the policy DataFrame (if a policy is active) on</span>
+<span class="sd">        the ``&quot;T&quot;`` column.  Policy-specific columns that share a name with</span>
+<span class="sd">        model columns are suffixed with ``&quot;_policy&quot;``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: Merged DataFrame with at minimum a ``&quot;T&quot;``</span>
+<span class="sd">            column and per-state count columns.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">model_df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">policy_df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">policy_df</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="n">df</span> <span class="o">=</span> <span class="n">model_df</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">policy_df</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;T&quot;</span><span class="p">,</span>
+                            <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span> <span class="n">suffixes</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;_policy&quot;</span><span class="p">))</span> <span class="k">if</span> <span class="n">policy_df</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">model_df</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+<div class="viewcode-block" id="ModelM.save_history">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.save_history">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_history</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the full simulation history to a CSV file.</span>
+
+<span class="sd">        Merges the model DataFrame with the policy DataFrame (same logic as</span>
+<span class="sd">        ``get_df``) and writes the result as CSV.  The DataFrame is also</span>
+<span class="sd">        printed to stdout.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            file_or_filename (str or file-like): Destination path or an</span>
+<span class="sd">                already-opened writable file object accepted by</span>
+<span class="sd">                ``pandas.DataFrame.to_csv``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">model_df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">policy_df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_object</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">policy_df</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="n">df</span> <span class="o">=</span> <span class="n">model_df</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">policy_df</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;T&quot;</span><span class="p">,</span>
+                            <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span> <span class="n">suffixes</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;_policy&quot;</span><span class="p">))</span> <span class="k">if</span> <span class="n">policy_df</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">model_df</span>
+
+<span class="c1">#        cols = df.columns.tolist()</span>
+<span class="c1">#        print(cols)</span>
+<span class="c1">#        cols.insert(0, cols.pop(cols.index(&#39;T&#39;)))</span>
+<span class="c1">#        df = df.reindex(columns= cols)</span>
+
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">file_or_filename</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">df</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.save_node_states">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.save_node_states">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Save per-node state time-series to a CSV file.</span>
+
+<span class="sd">        Delegates directly to the underlying model&#39;s ``save_node_states``</span>
+<span class="sd">        method.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Destination file path.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">save_node_states</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelM.init_matrix">
+<a class="viewcode-back" href="../src_modules.html#model_m.ModelM.init_matrix">[docs]</a>
+    <span class="k">def</span> <span class="nf">init_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Build and return the adjacency matrix (or graph object) for the model.</span>
+
+<span class="sd">        The return type depends on the concrete graph class:</span>
+
+<span class="sd">        * ``LightGraph`` / ``SimpleGraph`` – the graph object itself is</span>
+<span class="sd">          returned directly (the model accepts it natively).</span>
+<span class="sd">        * ``RandomSingleGraphGenerator`` – returns the underlying NetworkX</span>
+<span class="sd">          graph ``G`` (scenarios are not supported in this case).</span>
+<span class="sd">        * ``GraphGenerator`` – closes any layers listed in ``self.scenario``</span>
+<span class="sd">          and returns the final adjacency matrix.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            The adjacency representation accepted by the underlying epidemic</span>
+<span class="sd">            model (either the graph object or a sparse/dense matrix).</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            NotImplementedError: If ``RandomSingleGraphGenerator`` is used</span>
+<span class="sd">                together with a scenario.</span>
+<span class="sd">            TypeError: If the graph type is not recognised.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="n">LightGraph</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="n">SimpleGraph</span><span class="p">):</span>
+            <span class="c1">#            raise NotImplementedError(</span>
+            <span class="c1">#                &quot;LighGraph not  supported at the moment, waits for fixes.&quot;)</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="n">RandomSingleGraphGenerator</span><span class="p">):</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scenario</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+                    <span class="s2">&quot;RandomGraphGenerator does not support layers.&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">grahp</span><span class="o">.</span><span class="n">G</span>
+
+        <span class="c1"># this is what we currently used</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="n">GraphGenerator</span><span class="p">):</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scenario</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">close_layers</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scenario</span><span class="p">)</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">final_adjacency_matrix</span><span class="p">()</span>
+
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Unknown type of graph&quot;</span><span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="load_graph">
+<a class="viewcode-back" href="../src_modules.html#model_m.load_graph">[docs]</a>
+<span class="k">def</span> <span class="nf">load_graph</span><span class="p">(</span><span class="n">cf</span><span class="p">:</span> <span class="n">ConfigFile</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load or construct the contact-network graph described in ``cf``.</span>
+
+<span class="sd">    The graph type is determined by the ``type`` key in the ``[GRAPH]`` config</span>
+<span class="sd">    section.  Supported types:</span>
+
+<span class="sd">    * ``&quot;light&quot;`` – ``LightGraph`` loaded from CSV files.</span>
+<span class="sd">    * ``&quot;simple&quot;`` – ``SimpleGraph`` loaded from an edge CSV.</span>
+<span class="sd">    * ``&quot;pickle&quot;`` – a previously serialised graph is loaded with</span>
+<span class="sd">      ``pickle.load``.</span>
+
+<span class="sd">    If a ``file`` key is present in ``[GRAPH]`` and the file already exists on</span>
+<span class="sd">    disk the type is automatically overridden to ``&quot;pickle&quot;``.  After loading a</span>
+<span class="sd">    non-pickle graph, if a ``file`` path was specified the graph is serialised</span>
+<span class="sd">    with ``save_graph`` for future reuse.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cf (ConfigFile): Loaded configuration object with a ``[GRAPH]``</span>
+<span class="sd">            section containing at minimum a ``type`` key.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        LightGraph or SimpleGraph or GraphGenerator: The loaded graph object.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        NotImplementedError: If ``type`` is ``&quot;csv&quot;`` or ``&quot;random&quot;``</span>
+<span class="sd">            (deprecated / unsupported).</span>
+<span class="sd">        ValueError: If ``type`` is not one of the supported values.</span>
+<span class="sd">        AssertionError: If a pickle file contains an unexpected object type.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Load graph.&quot;</span><span class="p">)</span>
+
+    <span class="n">num_nodes</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;num_nodes&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="n">cf_graph</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;GRAPH&quot;</span><span class="p">)</span>
+
+    <span class="n">graph_type</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
+    <span class="n">filename</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;file&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">nodes</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nodes&quot;</span><span class="p">,</span> <span class="s2">&quot;nodes.csv&quot;</span><span class="p">)</span>
+    <span class="n">edges</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;edges&quot;</span><span class="p">,</span> <span class="s2">&quot;edges.csv&quot;</span><span class="p">)</span>
+    <span class="n">layers</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;layers&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">externals</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;externals&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">quarantine</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;quarantine&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">layer_groups</span> <span class="o">=</span> <span class="n">cf_graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;layer_groups&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">filename</span><span class="p">):</span>
+        <span class="n">graph_type</span> <span class="o">=</span> <span class="s1">&#39;pickle&#39;</span>
+
+    <span class="k">if</span> <span class="n">graph_type</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+            <span class="s2">&quot;Sorry. Graph_type &#39;csv&#39; is not supported anymore. Use light graph.&quot;</span><span class="p">)</span>
+        <span class="c1"># g = CSVGraphGenerator(path_to_nodes=nodes,</span>
+        <span class="c1">#                       path_to_external=externals,</span>
+        <span class="c1">#                       path_to_edges=edges,</span>
+        <span class="c1">#                       path_to_layers=layers,</span>
+        <span class="c1">#                       path_to_quarantine=quarantine)</span>
+
+<span class="c1">#    if graph_name == &quot;csv_light&quot;:</span>
+<span class="c1">#        return LightGraph(path_to_nodes=nodes, path_to_edges=edges, path_to_layers=layers)</span>
+
+    <span class="k">elif</span> <span class="n">graph_type</span> <span class="o">==</span> <span class="s2">&quot;light&quot;</span><span class="p">:</span>
+        <span class="n">g</span> <span class="o">=</span> <span class="n">LightGraph</span><span class="p">()</span>
+        <span class="n">g</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_nodes</span><span class="o">=</span><span class="n">nodes</span><span class="p">,</span>
+                   <span class="n">path_to_external</span><span class="o">=</span><span class="n">externals</span><span class="p">,</span>
+                   <span class="n">path_to_edges</span><span class="o">=</span><span class="n">edges</span><span class="p">,</span>
+                   <span class="n">path_to_layers</span><span class="o">=</span><span class="n">layers</span><span class="p">,</span>
+                   <span class="n">path_to_quarantine</span><span class="o">=</span><span class="n">quarantine</span><span class="p">,</span>
+                   <span class="n">path_to_layer_groups</span><span class="o">=</span><span class="n">layer_groups</span><span class="p">)</span>
+        
+    <span class="k">elif</span> <span class="n">graph_type</span> <span class="o">==</span> <span class="s2">&quot;simple&quot;</span><span class="p">:</span>
+        <span class="n">g</span> <span class="o">=</span> <span class="n">SimpleGraph</span><span class="p">()</span>
+        <span class="n">g</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_edges</span><span class="o">=</span><span class="n">edges</span><span class="p">)</span>
+
+    <span class="k">elif</span> <span class="n">graph_type</span> <span class="o">==</span> <span class="s2">&quot;random&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+            <span class="s2">&quot;Sorry. Graph_type &#39;random&#39; is not supported now. Use light graph and stay tuned.&quot;</span><span class="p">)</span>
+        <span class="c1"># g = RandomGraphGenerator()</span>
+
+    <span class="k">elif</span> <span class="n">graph_type</span> <span class="o">==</span> <span class="s2">&quot;pickle&quot;</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">g</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="n">GraphGenerator</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">g</span><span class="o">.</span><span class="n">A_valid</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Wow, matrix A is ready.&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="n">LightGraph</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="n">SimpleGraph</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Something weird (</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">g</span><span class="p">)</span><span class="si">}</span><span class="s2">) was loaded.&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Graph </span><span class="si">{</span><span class="n">graph_type</span><span class="si">}</span><span class="s2"> not available.&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">graph_type</span> <span class="o">!=</span> <span class="s2">&quot;pickle&quot;</span> <span class="ow">and</span> <span class="n">filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">save_graph</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">g</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">g</span></div>
+
+
+
+<div class="viewcode-block" id="save_graph">
+<a class="viewcode-back" href="../src_modules.html#model_m.save_graph">[docs]</a>
+<span class="k">def</span> <span class="nf">save_graph</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">graph</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Serialise a graph object to disk using pickle protocol 4.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str): Destination file path.</span>
+<span class="sd">        graph: Any graph object that is pickle-serialisable (e.g.</span>
+<span class="sd">            ``LightGraph``, ``SimpleGraph``, ``GraphGenerator``).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">protocol</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_load_policy_function</span><span class="p">(</span><span class="n">cf</span><span class="p">:</span> <span class="n">ConfigFile</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Dynamically import and configure the policy class specified in the config.</span>
+
+<span class="sd">    The function reads the ``[POLICY]`` section of ``cf`` for the class name</span>
+<span class="sd">    (``name``) and the module file (``filename``), then imports</span>
+<span class="sd">    ``policies.&lt;filename&gt;.&lt;name&gt;`` at runtime.  Policy constructor arguments</span>
+<span class="sd">    are read from ``[POLICY_SETUP]`` and merged with any overrides supplied</span>
+<span class="sd">    in ``policy_params``.</span>
+
+<span class="sd">    If no ``name`` is specified in ``[POLICY]``, the function returns</span>
+<span class="sd">    ``(None, None)``, signalling that no policy should be attached.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cf (ConfigFile): Loaded configuration object.</span>
+<span class="sd">        policy_params (dict or None): Additional keyword arguments that</span>
+<span class="sd">            override values from ``[POLICY_SETUP]``.  Defaults to ``None``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: A two-element tuple ``(PolicyClass, setup_dict)`` where</span>
+<span class="sd">        ``PolicyClass`` is the importted class (or ``None``) and</span>
+<span class="sd">        ``setup_dict`` is the merged constructor keyword arguments (or</span>
+<span class="sd">        ``None``).</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If the ``[POLICY]`` section is present but the ``filename``</span>
+<span class="sd">            key is missing.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">policy_cfg</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;POLICY&quot;</span><span class="p">)</span>
+
+    <span class="n">policy_name</span> <span class="o">=</span> <span class="n">policy_cfg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">policy_name</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="s2">&quot;filename&quot;</span> <span class="ow">in</span> <span class="n">policy_cfg</span><span class="p">:</span>
+        <span class="n">PolicyClass</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span>
+            <span class="nb">__import__</span><span class="p">(</span>
+                <span class="s2">&quot;policies.&quot;</span><span class="o">+</span><span class="n">policy_cfg</span><span class="p">[</span><span class="s2">&quot;filename&quot;</span><span class="p">],</span>
+                <span class="nb">globals</span><span class="p">(),</span> <span class="nb">locals</span><span class="p">(),</span>
+                <span class="p">[</span><span class="n">policy_name</span><span class="p">],</span>
+                <span class="mi">0</span>
+            <span class="p">),</span>
+            <span class="n">policy_name</span>
+        <span class="p">)</span>
+        <span class="n">setup</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;POLICY_SETUP&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">policy_params</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">setup</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">setup</span><span class="p">,</span> <span class="o">**</span><span class="n">policy_params</span><span class="p">}</span>
+
+        <span class="k">return</span> <span class="n">PolicyClass</span><span class="p">,</span> <span class="n">setup</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Warning: NO POLICY IN CFG&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">policy_cfg</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unknown policy.&quot;</span><span class="p">)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

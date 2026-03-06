@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>engine_daily &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>engine_daily</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for engine_daily</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Daily-batched Gillespie engine.</span>
+
+<span class="sd">This module defines :class:`DailyEngine`, which runs the Gillespie event</span>
+<span class="sd">selection intra-day but batches all state transitions to midnight, so the</span>
+<span class="sd">observable state changes once per simulated day.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">scipy</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.integrate</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine_seirspluslike</span><span class="w"> </span><span class="kn">import</span> <span class="n">SeirsPlusLikeEngine</span>
+
+
+<div class="viewcode-block" id="DailyEngine">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">DailyEngine</span><span class="p">(</span><span class="n">SeirsPlusLikeEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Gillespie engine that applies state transitions only at midnight.</span>
+
+<span class="sd">    Inherits from :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`.</span>
+<span class="sd">    During the day the engine collects proposed transitions in a to-do list;</span>
+<span class="sd">    at midnight (:meth:`update_states` / :meth:`midnight`) the transitions are</span>
+<span class="sd">    committed in bulk, ensuring the observable model state changes only once</span>
+<span class="sd">    per day.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="DailyEngine.inicialization">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.inicialization">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise engine and allocate the daily to-do lists.</span>
+
+<span class="sd">        Creates empty ``self.todo_list`` and ``self.todo_t`` accumulators</span>
+<span class="sd">        before delegating to the parent initialiser.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">todo_t</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.run_iteration">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">cumsum</span><span class="p">,</span> <span class="n">transition_types</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample the next Gillespie event and add it to the pending to-do list.</span>
+
+<span class="sd">        Does *not* apply the transition immediately; it is deferred to the</span>
+<span class="sd">        next call to :meth:`update_states`.  At most one pending transition</span>
+<span class="sd">        per node is kept (first-event-wins within a day).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            alpha (float): Total propensity (sum of all propensities).</span>
+<span class="sd">            cumsum (numpy.ndarray): Cumulative-sum vector over flattened</span>
+<span class="sd">                propensities, used for event selection.</span>
+<span class="sd">            transition_types (list): Ordered list of ``(from_state,</span>
+<span class="sd">                to_state)`` tuples matching the propensity order.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: Always ``True`` (day-level termination is handled by</span>
+<span class="sd">            :meth:`run`).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># 1. Generate 2 random numbers uniformly distributed in (0,1)</span>
+        <span class="n">r1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+        <span class="n">r2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+
+        <span class="c1"># 2. Calculate propensities</span>
+        <span class="c1">#        propensities, transition_types = self.calc_propensities()</span>
+
+        <span class="c1"># Terminate when probability of all events is 0:</span>
+        <span class="c1"># if propensities.sum() &lt;= 0.0:</span>
+        <span class="c1">#     self.finalize_data_series()</span>
+        <span class="c1">#     return False</span>
+
+        <span class="c1"># 4. Compute the time until the next event takes place</span>
+        <span class="n">tau</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">alpha</span><span class="p">)</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">r1</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">+=</span> <span class="n">tau</span>
+
+        <span class="c1"># 5. Compute which event takes place</span>
+        <span class="n">transition_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">cumsum</span><span class="p">,</span> <span class="n">r2</span><span class="o">*</span><span class="n">alpha</span><span class="p">)</span>
+        <span class="n">transition_node</span> <span class="o">=</span> <span class="n">transition_idx</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+        <span class="n">transition_type</span> <span class="o">=</span> <span class="n">transition_types</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">transition_idx</span><span class="o">/</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)]</span>
+
+        <span class="k">if</span> <span class="n">transition_node</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span><span class="p">]:</span>
+            <span class="c1">#        if (transition_node, transition_type) not in self.todo_list:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">todo_t</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">transition_node</span><span class="p">,</span> <span class="n">transition_type</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.update_states">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.update_states">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_states</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Commit all pending transitions accumulated during the current day.</span>
+
+<span class="sd">        Iterates ``self.todo_list`` and applies each transition by updating</span>
+<span class="sd">        ``self.memberships``, ``self.state_counts``, ``self.history``, and</span>
+<span class="sd">        ``self.N``.  Clears the to-do lists afterwards.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1">#        print(&quot;updating states&quot;)</span>
+        <span class="c1"># for t, (transition_node, transition_type) in zip(self.todo_t, self.todo_list):</span>
+        <span class="c1">#     print(t, transition_node, &quot;--&gt;&quot;, transition_type)</span>
+        <span class="c1"># 6. Update node states and data series</span>
+        <span class="k">for</span> <span class="n">t</span><span class="p">,</span> <span class="p">(</span><span class="n">transition_node</span><span class="p">,</span> <span class="n">transition_type</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">todo_t</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">):</span>
+                <span class="c1"># Room has run out in the timeseries storage arrays; double the size of these arrays</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+
+            <span class="k">assert</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Assertion error: Node </span><span class="si">{</span><span class="n">transition_node</span><span class="si">}</span><span class="s2"> has unexpected current state, given the intended transition of </span><span class="si">{</span><span class="n">transition_type</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="n">t</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">transition_node</span><span class="p">,</span> <span class="o">*</span><span class="n">transition_type</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">]][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">]][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="c1"># if node died</span>
+            <span class="k">if</span> <span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">invisible_states</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span>
+
+        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span>
+        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">todo_t</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">todo_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">todo_t</span> <span class="o">=</span> <span class="p">[]</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.midnight">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.midnight">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">midnight</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute end-of-day actions: commit transitions and recalculate propensities.</span>
+
+<span class="sd">        Calls :meth:`update_states` to apply all pending transitions, fires</span>
+<span class="sd">        ``self.periodic_update_callback`` if set (updating the graph if the</span>
+<span class="sd">        callback returns a new one), then recomputes propensities for the next</span>
+<span class="sd">        day via :meth:`propensities_recalc`.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            verbose (bool): Passed through (currently unused).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple: ``(alpha, cumsum, has_events, transition_types)`` as</span>
+<span class="sd">            returned by :meth:`propensities_recalc`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_states</span><span class="p">()</span>
+
+        <span class="c1"># run periodical update</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="p">:</span>
+            <span class="n">changes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="s2">&quot;graph&quot;</span> <span class="ow">in</span> <span class="n">changes</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;CHANGING GRAPH&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">update_graph</span><span class="p">(</span><span class="n">changes</span><span class="p">[</span><span class="s2">&quot;graph&quot;</span><span class="p">])</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">propensities_recalc</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.print">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.print">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Print the current simulation time and optionally per-state counts.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            verbose (bool, optional): If ``True``, also print per-state</span>
+<span class="sd">                counts. Defaults to ``False``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;t = </span><span class="si">%.2f</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\t</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="si">}</span><span class="s2"> = </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">state</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.propensities_recalc">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.propensities_recalc">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">propensities_recalc</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Recalculate propensities and return flattened cumulative-sum data.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple: A 4-tuple ``(alpha, cumsum, has_events, transition_types)``</span>
+<span class="sd">            where:</span>
+
+<span class="sd">            * ``alpha`` (float) – total propensity.</span>
+<span class="sd">            * ``cumsum`` (numpy.ndarray) – cumulative sum of flattened</span>
+<span class="sd">              propensity array.</span>
+<span class="sd">            * ``has_events`` (bool) – ``True`` if total propensity is &gt; 0.</span>
+<span class="sd">            * ``transition_types`` (list) – ordered ``(from, to)`` transition</span>
+<span class="sd">              pairs.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># 2. Calculate propensities</span>
+        <span class="n">propensities</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">calc_propensities</span><span class="p">())</span>
+        <span class="n">transition_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transitions</span>
+
+        <span class="c1"># 3. Calculate alpha</span>
+        <span class="c1"># nebylo by rychlejsi order=C a prohodi // a % ?</span>
+        <span class="n">propensities_flat</span> <span class="o">=</span> <span class="n">propensities</span><span class="o">.</span><span class="n">ravel</span><span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="s2">&quot;F&quot;</span><span class="p">)</span>
+        <span class="n">cumsum</span> <span class="o">=</span> <span class="n">propensities_flat</span><span class="o">.</span><span class="n">cumsum</span><span class="p">()</span>
+        <span class="n">alpha</span> <span class="o">=</span> <span class="n">propensities_flat</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">cumsum</span><span class="p">,</span> <span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">transition_types</span></div>
+
+
+<div class="viewcode-block" id="DailyEngine.run">
+<a class="viewcode-back" href="../src_modules.html#engine_daily.DailyEngine.run">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the daily-batched simulation for up to *T* time units.</span>
+
+<span class="sd">        Calls :meth:`propensities_recalc` once at the start, then loops over</span>
+<span class="sd">        :meth:`run_iteration`.  At each midnight calls :meth:`midnight` to</span>
+<span class="sd">        commit transitions and recompute propensities.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            T (int or float): Duration to simulate.</span>
+<span class="sd">            print_interval (int, optional): Print status every this many</span>
+<span class="sd">                days. Defaults to ``10``.</span>
+<span class="sd">            verbose (bool, optional): If ``True``, include per-state detail in</span>
+<span class="sd">                progress messages. Defaults to ``False``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: ``True`` on completion, ``False`` if *T* &lt;= 0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">T</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tmax</span> <span class="o">+=</span> <span class="n">T</span>
+
+        <span class="n">running</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">day</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+            <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+        <span class="n">alpha</span><span class="p">,</span> <span class="n">cumsum</span><span class="p">,</span> <span class="n">running</span><span class="p">,</span> <span class="n">transition_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">propensities_recalc</span><span class="p">()</span>
+
+        <span class="k">while</span> <span class="n">running</span><span class="p">:</span>
+
+            <span class="n">running</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">(</span><span class="n">alpha</span><span class="p">,</span> <span class="n">cumsum</span><span class="p">,</span> <span class="n">transition_types</span><span class="p">)</span>
+
+            <span class="c1"># true after the first event after midnight</span>
+            <span class="n">day_changed</span> <span class="o">=</span> <span class="n">day</span> <span class="o">!=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="n">day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">day_changed</span> <span class="ow">and</span> <span class="n">day</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">alpha</span><span class="p">,</span> <span class="n">cumsum</span><span class="p">,</span> <span class="n">running</span><span class="p">,</span> <span class="n">transition_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">midnight</span><span class="p">(</span>
+                    <span class="n">verbose</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="n">day</span> <span class="o">%</span> <span class="n">print_interval</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+                        <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Last day took: &quot;</span><span class="p">,</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">,</span> <span class="s2">&quot;seconds&quot;</span><span class="p">)</span>
+                        <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+                <span class="c1"># Terminate if tmax reached or num infectious and num exposed is 0:</span>
+                <span class="n">numI</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+                            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">unstable_states</span>
+                            <span class="p">])</span>
+
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tmax</span> <span class="ow">or</span> <span class="n">numI</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+                    <span class="n">running</span> <span class="o">=</span> <span class="kc">False</span>
+
+                <span class="n">day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+</div>
+
+
+    <span class="c1"># def increase_data_series_length(self):</span>
+    <span class="c1">#     self.tseries.bloat()</span>
+    <span class="c1">#     self.history.bloat()</span>
+    <span class="c1">#     for state in self.states:</span>
+    <span class="c1">#         self.state_counts[state].bloat()</span>
+    <span class="c1">#     self.N.bloat()</span>
+
+    <span class="c1"># def finalize_data_series(self):</span>
+    <span class="c1">#     self.tseries.finalize(self.tidx)</span>
+    <span class="c1">#     self.history.finalize(self.tidx)</span>
+    <span class="c1">#     for state in self.states:</span>
+    <span class="c1">#         self.state_counts[state].finalize(self.tidx)</span>
+    <span class="c1">#     self.N.finalize(self.tidx)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

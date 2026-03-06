@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>graph_gen &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>graph_gen</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for graph_gen</h1><div class="highlight"><pre>
+<span></span><span class="c1"># these graphs are not used and the file is not maintained at the moment</span>
+<span class="c1"># random graphs should be used in the future</span>
+
+<span class="c1"># -*- coding: utf-8 -*-</span>
+<span class="sd">&quot;&quot;&quot;NetworkX-based multi-layer graph generators (legacy, not actively maintained).</span>
+
+<span class="sd">This module provides :class:`GraphGenerator` and several concrete subclasses</span>
+<span class="sd">that build multi-layer contact graphs backed by a NetworkX ``MultiGraph``.</span>
+<span class="sd">These classes pre-date the :class:`~graphs.light.LightGraph` implementation</span>
+<span class="sd">and are no longer used in production simulations; random-graph variants are</span>
+<span class="sd">planned for future use.</span>
+
+<span class="sd">Classes:</span>
+<span class="sd">    GraphGenerator: Base class wrapping a NetworkX MultiGraph with</span>
+<span class="sd">    layer-aware helper methods.</span>
+<span class="sd">    RandomSingleGraphGenerator: Generates a single-layer Barabasi-Albert</span>
+<span class="sd">    graph with exponentially trimmed degree distribution.</span>
+<span class="sd">    RandomGraphGenerator: Generates one Barabasi-Albert graph per layer</span>
+<span class="sd">    with random truncated-normal edge weights.</span>
+<span class="sd">    PickleGraphGenerator: Restores a graph from a NetworkX pickle file.</span>
+<span class="sd">    CSVGraphGenerator: Builds a graph from nodes, edges and layer CSV files.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.stats</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">stats</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.sparse</span><span class="w"> </span><span class="kn">import</span> <span class="n">csr_matrix</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.sparse_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">multiply_zeros_as_ones</span>
+
+
+<div class="viewcode-block" id="GraphGenerator">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">GraphGenerator</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for multi-layer contact-graph generators.</span>
+
+<span class="sd">    Wraps a NetworkX ``MultiGraph`` (``self.G``) and provides layer-aware</span>
+<span class="sd">    helpers for building, querying and modifying multi-layer contact networks.</span>
+<span class="sd">    Subclasses are responsible for populating ``self.G`` with nodes and edges.</span>
+
+<span class="sd">    Class Attributes:</span>
+<span class="sd">        layer_names (list[str]): Ordered list of layer name strings.</span>
+<span class="sd">            Default covers 14 generic layers (``&#39;F&#39;`` through ``&#39;Z&#39;``).</span>
+<span class="sd">        layer_probs (list[float]): Per-layer transmission probabilities,</span>
+<span class="sd">            initialised to ``1.0`` for every layer.</span>
+<span class="sd">        layer_types (list[int]): Integer indices corresponding to each layer.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        G (networkx.MultiGraph): The underlying multi-layer graph.</span>
+<span class="sd">        Graphs (dict): Optional per-layer single-layer graph cache populated</span>
+<span class="sd">            by :meth:`as_dict_of_graphs`.</span>
+<span class="sd">        A (scipy.sparse.csr_matrix or None): Cached final adjacency matrix.</span>
+<span class="sd">            ``None`` until first computed.</span>
+<span class="sd">        A_valid (bool): ``True`` when the cached adjacency matrix is up to</span>
+<span class="sd">            date with the current edge weights.</span>
+<span class="sd">        A_invalids (set): Set of ``(u, v)`` node pairs whose adjacency</span>
+<span class="sd">            matrix entries need recomputing.</span>
+<span class="sd">        quarantined_edges (dict): Mapping from edge keys to their original</span>
+<span class="sd">            weights, used to restore edges after a quarantine is lifted.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        random_seed (int, optional): Seed for NumPy&#39;s random number</span>
+<span class="sd">            generator.  ``None`` leaves the global RNG state unchanged.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">layer_names</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;F&#39;</span><span class="p">,</span> <span class="s1">&#39;D&#39;</span><span class="p">,</span> <span class="s1">&#39;P&#39;</span><span class="p">,</span> <span class="s1">&#39;E&#39;</span><span class="p">,</span> <span class="s1">&#39;H&#39;</span><span class="p">,</span> <span class="s1">&#39;K&#39;</span><span class="p">,</span>
+                   <span class="s1">&#39;C&#39;</span><span class="p">,</span> <span class="s1">&#39;S&#39;</span><span class="p">,</span> <span class="s1">&#39;O&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="s1">&#39;R&#39;</span><span class="p">,</span> <span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="s1">&#39;X&#39;</span><span class="p">,</span> <span class="s1">&#39;Z&#39;</span><span class="p">]</span>
+    <span class="n">layer_probs</span> <span class="o">=</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">layer_names</span><span class="p">)</span>
+    <span class="n">layer_types</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">layer_names</span><span class="p">)))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">MultiGraph</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_names&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_probs</span>
+
+        <span class="k">if</span> <span class="n">random_seed</span><span class="p">:</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantined_edges</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;NodeView of all nodes in the underlying MultiGraph.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.classes.reportviews.NodeView: All nodes of ``self.G``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">nodes</span>
+
+<div class="viewcode-block" id="GraphGenerator.number_of_nodes">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.number_of_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">number_of_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the total number of nodes in the graph.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Number of nodes in ``self.G``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.as_multigraph">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.as_multigraph">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">as_multigraph</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the raw underlying NetworkX MultiGraph.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.MultiGraph: The underlying graph object ``self.G``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.as_one_graph">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.as_one_graph">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">as_one_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Collapse the MultiGraph into a simple undirected Graph.</span>
+
+<span class="sd">        Parallel edges between any pair of nodes are merged.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.Graph: A simple graph derived from ``self.G``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">nx</span><span class="o">.</span><span class="n">Graph</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.as_aggregated_graph">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.as_aggregated_graph">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">as_aggregated_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Build an aggregated single-layer graph (incomplete, legacy stub).</span>
+
+<span class="sd">        This method is a historical stub and does not return a fully</span>
+<span class="sd">        populated graph.  It exists for backward-compatibility only.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.Graph: An empty graph with the same node set as</span>
+<span class="sd">            ``self.G``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ag</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">Graph</span><span class="p">()</span>
+        <span class="n">ag</span><span class="o">.</span><span class="n">add_nodes_from</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+
+        <span class="n">lp</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">selected_edges</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="p">):</span>
+            <span class="n">lp</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">selected_edges</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span>
+                <span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">if</span> <span class="n">e</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">l</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="n">ag</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.final_adjacency_matrix">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.final_adjacency_matrix">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">final_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute (or return cached) the final contact-probability adjacency matrix.</span>
+
+<span class="sd">        The matrix entry ``A[i, j]`` holds the probability that nodes ``i``</span>
+<span class="sd">        and ``j`` make contact across *any* layer, calculated as</span>
+<span class="sd">        ``1 - product_over_layers(1 - p_layer * w_edge)``.</span>
+
+<span class="sd">        A two-level caching strategy is used:</span>
+
+<span class="sd">        * If ``A_valid`` is ``True`` the cached matrix is returned</span>
+<span class="sd">          immediately.</span>
+<span class="sd">        * If the matrix has never been computed (``A is None``) or</span>
+<span class="sd">          ``A_invalids`` is empty, the entire matrix is recalculated from</span>
+<span class="sd">          scratch.</span>
+<span class="sd">        * Otherwise only the entries listed in ``A_invalids`` are</span>
+<span class="sd">          recomputed.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            scipy.sparse.csr_matrix: Symmetric probability matrix of shape</span>
+<span class="sd">            ``(N, N)`` where ``N`` is the number of nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span><span class="p">:</span>
+            <span class="n">N</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">()</span>
+            <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">csr_matrix</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span>  <span class="c1"># empty values = 1.0</span>
+
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">prob</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_layers_info</span><span class="p">()</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">a</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">adj_matrix</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_graph_for_layer</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">data</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>  <span class="c1"># no edges, prob of no-contact = 1</span>
+                    <span class="k">continue</span>
+                <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">prob</span><span class="p">)</span>  <span class="c1"># contact on layer</span>
+                <span class="n">not_a</span> <span class="o">=</span> <span class="n">a</span>  <span class="c1"># empty values = 1.0</span>
+                <span class="n">not_a</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">not_a</span><span class="o">.</span><span class="n">data</span>  <span class="c1"># prob of no-contace</span>
+                <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">multiply_zeros_as_ones</span><span class="p">(</span>
+                    <span class="n">prob_no_contact</span><span class="p">,</span> <span class="n">not_a</span><span class="p">)</span>
+                <span class="k">del</span> <span class="n">a</span>
+
+            <span class="c1"># prob_of_contact = 1.0 - prob_no_contact</span>
+            <span class="n">prob_of_contact</span> <span class="o">=</span> <span class="n">prob_no_contact</span>
+            <span class="n">prob_of_contact</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">prob_no_contact</span><span class="o">.</span><span class="n">data</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="n">prob_of_contact</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># recalculate only invalids</span>
+            <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span><span class="p">):</span>
+                <span class="n">edges_to_aggregate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">]</span>
+                <span class="n">sublayers</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">edges_to_aggregate</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+                    <span class="n">sublayers</span><span class="p">[</span><span class="n">e</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">sublayers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                        <span class="n">e</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">],</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">e</span><span class="p">[</span><span class="s2">&quot;weight&quot;</span><span class="p">]</span>
+
+                <span class="n">no_contact_prob</span> <span class="o">=</span> <span class="mf">1.0</span>
+                <span class="k">for</span> <span class="n">layer_type</span><span class="p">,</span> <span class="n">weight</span> <span class="ow">in</span> <span class="n">sublayers</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                    <span class="n">w</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">weight</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s2">&quot;layer_probs&quot;</span><span class="p">][</span><span class="n">layer_type</span><span class="p">]</span>
+                    <span class="n">no_contact_prob</span> <span class="o">*=</span> <span class="n">w</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">no_contact_prob</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">v</span><span class="p">,</span> <span class="n">u</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">no_contact_prob</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.get_graph_for_layer">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.get_graph_for_layer">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_graph_for_layer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layer_name</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extract a single-layer subgraph for the named layer.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            layer_name (str): Name of the layer to extract, must appear in</span>
+<span class="sd">                ``self.layer_names``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.Graph: A new simple graph containing all nodes of</span>
+<span class="sd">            ``self.G`` and only the edges whose ``&#39;type&#39;`` attribute matches</span>
+<span class="sd">            the index of ``layer_name`` in ``self.layer_names``.  The graph&#39;s</span>
+<span class="sd">            metadata includes ``&#39;layer_name&#39;`` and ``&#39;layer_prob&#39;``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret_g</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">Graph</span><span class="p">()</span>
+        <span class="n">ret_g</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">layer_name</span>
+        <span class="n">layer_index</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">layer_name</span><span class="p">)</span>
+        <span class="n">ret_g</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_prob&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">layer_index</span><span class="p">]</span>
+
+        <span class="n">ret_g</span><span class="o">.</span><span class="n">add_nodes_from</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+        <span class="n">selected_edges</span> <span class="o">=</span> <span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+                          <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                          <span class="k">if</span> <span class="n">e</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">layer_name</span><span class="p">)]</span>
+        <span class="n">ret_g</span><span class="o">.</span><span class="n">add_edges_from</span><span class="p">(</span><span class="n">selected_edges</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">ret_g</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.as_dict_of_graphs">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.as_dict_of_graphs">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">as_dict_of_graphs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Build a per-layer dictionary of single-layer graphs.</span>
+
+<span class="sd">        Iterates over all layers, constructs a separate :class:`networkx.Graph`</span>
+<span class="sd">        for each one (all nodes, only edges on that layer) and caches the</span>
+<span class="sd">        result in ``self.Graphs``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            dict[str, networkx.Graph]: Mapping of layer name to its</span>
+<span class="sd">            corresponding single-layer graph.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="p">):</span>
+            <span class="n">FG</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">Graph</span><span class="p">()</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">l</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_prob&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">add_nodes_from</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+            <span class="n">selected_edges</span> <span class="o">=</span> <span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">e</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span>
+                <span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">if</span> <span class="n">e</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">l</span><span class="p">]</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">add_edges_from</span><span class="p">(</span><span class="n">selected_edges</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span><span class="p">[</span><span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="n">FG</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.get_attr_list">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.get_attr_list">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_attr_list</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">attr</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a list of node attribute values in node-iteration order.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            attr (str): Name of the node attribute to collect.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list: Attribute values for every node in ``self.G``, ordered by</span>
+<span class="sd">            NetworkX&#39;s default node-iteration order.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">attr_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">nodes</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="n">attr_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">d</span><span class="p">[</span><span class="n">attr</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">attr_list</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.get_edges_for_node">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.get_edges_for_node">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_for_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all edges incident to a given node.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_id: Node identifier as stored in ``self.G``.  If the node</span>
+<span class="sd">                does not exist a warning is printed and ``None`` is returned</span>
+<span class="sd">                implicitly.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            networkx.classes.reportviews.OutMultiEdgeDataView or None:</span>
+<span class="sd">            An edge-data view for all edges incident to ``node_id``, or</span>
+<span class="sd">            ``None`` (implicit) if the node is not in the graph.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">has_node</span><span class="p">(</span><span class="n">node_id</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Warning: modify_layer_for_node called for nonexisting node_id </span><span class="si">{</span><span class="n">node_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span>
+
+        <span class="c1"># for key in what_by_what:</span>
+        <span class="c1">#     edges_to_modify = [</span>
+        <span class="c1">#         (u, v, k) for u, v, k, d in self.G.edges(node, data=True, keys=True)</span>
+        <span class="c1">#         if d[&#39;label&#39;] == key</span>
+        <span class="c1">#     ]</span>
+        <span class="c1">#     print(edges_to_modify)</span>
+        <span class="c1">#     for e in edges_to_modify:</span>
+        <span class="c1">#         self.G.edges[e][&#39;weight&#39;] *= what_by_what[key]</span>
+
+        <span class="c1"># for e in self.G.edges(node, data=True, keys=True):</span>
+        <span class="c1">#     print(*e)</span>
+
+<span class="c1">#        for e in self.G.edges([node_id], data=True, keys=True):</span>
+<span class="c1">#            print(*e)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">([</span><span class="n">node_id</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">keys</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.get_layers_for_edge">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.get_layers_for_edge">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_layers_for_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the list of layer types for all parallel edges between two nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            u: Source node identifier.</span>
+<span class="sd">            v: Destination node identifier.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list[int]: Layer type (``&#39;type&#39;`` attribute) for each parallel</span>
+<span class="sd">            edge between ``u`` and ``v`` in the MultiGraph.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">edges</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">]</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">d</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">values</span><span class="p">()]</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.modify_layers_for_nodes">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.modify_layers_for_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">modify_layers_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id_list</span><span class="p">,</span> <span class="n">what_by_what</span><span class="p">,</span> <span class="n">is_quarrantined</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply quarantine by scaling edge weights for given nodes.</span>
+
+<span class="sd">        For each edge incident to a node in ``node_id_list`` whose layer</span>
+<span class="sd">        appears in ``what_by_what``, the edge weight is multiplied by the</span>
+<span class="sd">        corresponding coefficient (clipped to ``[0, 1]``).  Edges that are</span>
+<span class="sd">        already quarantined (i.e. at least one endpoint has a non-zero</span>
+<span class="sd">        quarantine counter in ``is_quarrantined``) are skipped.</span>
+
+<span class="sd">        The original weight is recorded in ``self.quarantined_edges`` so it</span>
+<span class="sd">        can be restored by :meth:`recover_edges_for_nodes`.  Affected</span>
+<span class="sd">        ``(u, v)`` pairs are added to ``A_invalids`` so the adjacency matrix</span>
+<span class="sd">        will be partially recomputed on next access.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_id_list (iterable): Node identifiers whose incident edges</span>
+<span class="sd">                should be modified.</span>
+<span class="sd">            what_by_what (dict): Mapping of ``{layer_type: coefficient}``</span>
+<span class="sd">                specifying the weight multiplier for each layer.  If falsy</span>
+<span class="sd">                (empty or ``None``) the method returns immediately.</span>
+<span class="sd">            is_quarrantined (numpy.ndarray, optional): Per-node quarantine</span>
+<span class="sd">                counters.  When provided, edges where either endpoint has a</span>
+<span class="sd">                non-zero counter are skipped.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">what_by_what</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># if not self.G.has_node(node_id):</span>
+        <span class="c1">#     print(f&quot;Warning: modify_layer_for_node called for nonexisting node_id {node_id}&quot;)</span>
+        <span class="c1">#     return</span>
+
+        <span class="n">changed</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="c1"># keep the original list (it is modified in the cycle)</span>
+        <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">node_id_list</span><span class="p">),</span> <span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">keys</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">is_quarrantined</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="p">(</span><span class="n">is_quarrantined</span><span class="p">[</span><span class="n">u</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">is_quarrantined</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
+                <span class="c1"># edge is already quarrantined</span>
+                <span class="k">continue</span>
+            <span class="n">layer_label</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">layer_label</span> <span class="ow">in</span> <span class="n">what_by_what</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">],</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;subtype&quot;</span><span class="p">])</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">quarantined_edges</span><span class="p">,</span> \
+                    <span class="sa">f</span><span class="s2">&quot;edge </span><span class="si">{</span><span class="p">(</span><span class="n">u</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">k</span><span class="p">,</span><span class="w"> </span><span class="n">d</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">],</span><span class="w"> </span><span class="n">d</span><span class="p">[</span><span class="s1">&#39;subtype&#39;</span><span class="p">])</span><span class="si">}</span><span class="s2"> is already quaratined, </span><span class="si">{</span><span class="n">is_quarrantined</span><span class="p">[</span><span class="n">u</span><span class="p">]</span><span class="si">}{</span><span class="n">is_quarrantined</span><span class="p">[</span><span class="n">v</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="n">s</span><span class="p">,</span> <span class="n">e</span> <span class="o">=</span> <span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&lt;</span> <span class="n">v</span> <span class="k">else</span> <span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">u</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">quarantined_edges</span><span class="p">[(</span>
+                    <span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">],</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;subtype&quot;</span><span class="p">])]</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
+                             <span class="p">][</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">)][</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">*</span> <span class="n">what_by_what</span><span class="p">[</span><span class="n">layer_label</span><span class="p">],</span> <span class="mf">1.0</span><span class="p">)</span>
+                <span class="n">changed</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">changed</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">changed</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.recover_edges_for_nodes">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.recover_edges_for_nodes">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">recover_edges_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">release</span><span class="p">,</span> <span class="n">normal_life</span><span class="p">,</span> <span class="n">is_quarrantined</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore original edge weights for nodes being released from quarantine.</span>
+
+<span class="sd">        Iterates over all edges incident to ``release`` nodes.  For edges</span>
+<span class="sd">        where both endpoints have a zero quarantine counter in</span>
+<span class="sd">        ``is_quarrantined``, the weight stored in ``self.quarantined_edges``</span>
+<span class="sd">        is written back.  Edges where at least one endpoint is still</span>
+<span class="sd">        quarantined are left unchanged.</span>
+
+<span class="sd">        Affected ``(u, v)`` pairs are added to ``A_invalids`` so the</span>
+<span class="sd">        adjacency matrix is recomputed on next access.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            release (iterable): Node identifiers being released from</span>
+<span class="sd">                quarantine.</span>
+<span class="sd">            normal_life: Unused parameter retained for interface</span>
+<span class="sd">                compatibility with the ``LightGraph`` API.</span>
+<span class="sd">            is_quarrantined (numpy.ndarray): Per-node quarantine counters</span>
+<span class="sd">                indexed by node ID.  Nodes with a counter of ``0`` are</span>
+<span class="sd">                considered free.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">changed</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">release</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">keys</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">is_quarrantined</span><span class="p">[</span><span class="n">u</span><span class="p">]</span> <span class="ow">or</span> <span class="n">is_quarrantined</span><span class="p">[</span><span class="n">v</span><span class="p">]:</span>
+                <span class="c1"># still one of nodes is in quarrantine</span>
+                <span class="k">continue</span>
+            <span class="n">e_type</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
+            <span class="n">e_subtype</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;subtype&quot;</span><span class="p">]</span>
+            <span class="c1"># new_weight = None</span>
+            <span class="c1"># for edata in normal_life.G.get_edge_data(u, v).values():</span>
+            <span class="c1">#     if edata[&quot;type&quot;] == e_type and edata[&quot;subtype&quot;] == e_subtype:</span>
+            <span class="c1">#         new_weight = edata[&quot;weight&quot;]</span>
+            <span class="c1">#         break</span>
+            <span class="c1"># if new_weight is None:</span>
+            <span class="c1">#     raise ValueError(&quot;Edge not found in normal life.&quot;)</span>
+            <span class="n">s</span><span class="p">,</span> <span class="n">e</span> <span class="o">=</span> <span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&lt;</span> <span class="n">v</span> <span class="k">else</span> <span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">u</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">[(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">)][</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">quarantined_edges</span><span class="p">[(</span>
+                <span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">e_type</span><span class="p">,</span> <span class="n">e_subtype</span><span class="p">)]</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">quarantined_edges</span><span class="p">[(</span>
+                <span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">e_type</span><span class="p">,</span> <span class="n">e_subtype</span><span class="p">)]</span>
+            <span class="n">changed</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">changed</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_invalids</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">changed</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.get_layers_info">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.get_layers_info">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_layers_info</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a mapping of layer names to their transmission probabilities.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            dict[str, float]: Dictionary mapping each layer name to its</span>
+<span class="sd">            current transmission probability as stored in</span>
+<span class="sd">            ``self.G.graph[&#39;layer_probs&#39;]``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s2">&quot;layer_names&quot;</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s2">&quot;layer_probs&quot;</span><span class="p">]))</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.print_multi">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.print_multi">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">print_multi</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Print the MultiGraph in DOT format to stdout.&quot;&quot;&quot;</span>
+        <span class="n">dot_G</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">nx_pydot</span><span class="o">.</span><span class="n">to_pydot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">dot_G</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.draw_multi">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.draw_multi">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">draw_multi</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="o">=</span><span class="s1">&#39;empty_graph.png&#39;</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Render the MultiGraph using Graphviz and save it to a file.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Output file path for the rendered image.</span>
+<span class="sd">                Defaults to ``&#39;empty_graph.png&#39;``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">nx_agraph</span><span class="o">.</span><span class="n">to_agraph</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+        <span class="n">A</span><span class="o">.</span><span class="n">layout</span><span class="p">(</span><span class="s1">&#39;dot&#39;</span><span class="p">)</span>
+        <span class="n">A</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.close_layers">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.close_layers">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">close_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_layers</span><span class="p">,</span> <span class="n">coefs</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transmission probability to zero (or a custom value) for named layers.</span>
+
+<span class="sd">        Invalidates the cached adjacency matrix so it will be recomputed on</span>
+<span class="sd">        next access.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            list_of_layers (list[str]): Names of layers to close.</span>
+<span class="sd">            coefs (list[float], optional): Per-layer replacement probabilities.</span>
+<span class="sd">                When provided, ``coefs[idx]`` is used for the layer at</span>
+<span class="sd">                position ``idx`` in ``list_of_layers``.  When ``None`` all</span>
+<span class="sd">                listed layers are set to ``0``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">list_of_layers</span><span class="p">):</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s2">&quot;layer_names&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s2">&quot;layer_probs&quot;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">coefs</span> <span class="k">else</span> <span class="n">coefs</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Closing </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> (new value </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A_valid</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.write_pickle">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.write_pickle">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">write_pickle</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Serialize the underlying NetworkX graph to a pickle file.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            path (str): Destination file path for the pickle.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">nx</span><span class="o">.</span><span class="n">write_gpickle</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="GraphGenerator.read_picke">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.GraphGenerator.read_picke">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">read_picke</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore the graph from a NetworkX pickle file.</span>
+
+<span class="sd">        Note: The method name contains a deliberate historical typo</span>
+<span class="sd">        (``read_picke`` instead of ``read_pickle``); it is kept as-is for</span>
+<span class="sd">        backward compatibility.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            path (str): Path to the pickle file to read.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">read_gpickle</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_names&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_probs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">]</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="custom_exponential_graph">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.custom_exponential_graph">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">custom_exponential_graph</span><span class="p">(</span><span class="n">base_graph</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">min_num_edges</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">m</span><span class="o">=</span><span class="mi">9</span><span class="p">,</span> <span class="n">n</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate a power-law-esque graph by thinning a Barabasi-Albert base graph.</span>
+
+<span class="sd">    Starts from a Barabasi-Albert preferential-attachment graph (expected to</span>
+<span class="sd">    form a single connected component) and then stochastically removes edges</span>
+<span class="sd">    from each node so that the resulting degree distribution has an</span>
+<span class="sd">    exponential tail rather than a hard minimum of ``m``.</span>
+
+<span class="sd">    For each node the number of edges to *keep* is drawn from an exponential</span>
+<span class="sd">    distribution with the given ``scale``, clipped to</span>
+<span class="sd">    ``[min_num_edges, current_degree]``.  Edges not selected for retention</span>
+<span class="sd">    are removed.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        base_graph (networkx.Graph, optional): Pre-existing graph to thin.</span>
+<span class="sd">            When ``None`` a fresh Barabasi-Albert graph of ``n`` nodes is</span>
+<span class="sd">            created.</span>
+<span class="sd">        scale (float): Scale parameter of the exponential distribution used</span>
+<span class="sd">            to sample the number of edges to keep per node.  Defaults to</span>
+<span class="sd">            ``100``.</span>
+<span class="sd">        min_num_edges (int): Minimum number of edges guaranteed to be kept</span>
+<span class="sd">            per node.  Defaults to ``0``.</span>
+<span class="sd">        m (int): Number of edges added per node when constructing the</span>
+<span class="sd">            Barabasi-Albert base graph (only relevant when</span>
+<span class="sd">            ``base_graph`` is ``None``).  Defaults to ``9``.</span>
+<span class="sd">        n (int, optional): Number of nodes for the Barabasi-Albert graph.</span>
+<span class="sd">            Required when ``base_graph`` is ``None``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        networkx.Graph: The thinned graph.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        AssertionError: If ``base_graph`` is ``None`` and ``n`` is also</span>
+<span class="sd">            ``None``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">base_graph</span><span class="p">):</span>
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">base_graph</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">assert</span><span class="p">(</span><span class="n">n</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">),</span> <span class="s2">&quot;Argument n (number of nodes) must be provided when no base graph is given.&quot;</span>
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">barabasi_albert_graph</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">n</span><span class="p">,</span> <span class="n">m</span><span class="o">=</span><span class="n">m</span><span class="p">)</span>
+
+<span class="c1"># To get a graph with power-law-esque properties but without the fixed minimum degree,</span>
+<span class="c1"># We modify the graph by probabilistically dropping some edges from each node.</span>
+    <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">graph</span><span class="p">:</span>
+        <span class="n">neighbors</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">graph</span><span class="p">[</span><span class="n">node</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="n">quarantineEdgeNum</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">exponential</span><span class="p">(</span>
+            <span class="n">scale</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">neighbors</span><span class="p">)),</span> <span class="n">min_num_edges</span><span class="p">))</span>
+<span class="c1">#        print(quarantineEdgeNum)</span>
+        <span class="n">quarantineKeepNeighbors</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span>
+            <span class="n">neighbors</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">quarantineEdgeNum</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">neighbor</span> <span class="ow">in</span> <span class="n">neighbors</span><span class="p">:</span>
+            <span class="k">if</span><span class="p">(</span><span class="n">neighbor</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">quarantineKeepNeighbors</span><span class="p">):</span>
+                <span class="n">graph</span><span class="o">.</span><span class="n">remove_edge</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">neighbor</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">graph</span></div>
+
+
+
+<div class="viewcode-block" id="RandomSingleGraphGenerator">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.RandomSingleGraphGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RandomSingleGraphGenerator</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph generator producing a single-layer random contact graph.</span>
+
+<span class="sd">    Builds one Barabasi-Albert graph (with exponential degree thinning) and</span>
+<span class="sd">    assigns each edge a truncated-normal weight in ``(0, 1)``.  The resulting</span>
+<span class="sd">    graph has no layer structure (it collapses all contacts into a single</span>
+<span class="sd">    layer).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        num_nodes (int): Number of nodes.  Defaults to ``10000``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to</span>
+<span class="sd">            :class:`GraphGenerator`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_nodes</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="n">num_nodes</span>
+
+        <span class="c1"># generate random connections</span>
+        <span class="n">baseGraph</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">barabasi_albert_graph</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">m</span><span class="o">=</span><span class="mi">9</span><span class="p">)</span>
+        <span class="n">FG</span> <span class="o">=</span> <span class="n">custom_exponential_graph</span><span class="p">(</span><span class="n">baseGraph</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+
+<span class="c1">#       list_of_zeroes = [ n for n, d in FG.degree() if d == 0 ]</span>
+<span class="c1">#       if list_of_zeroes != []:</span>
+<span class="c1">#           print(&#39;OMG: &#39;, list_of_zeroes)</span>
+
+        <span class="c1"># generate random weights from trunc norm</span>
+        <span class="n">lower</span><span class="p">,</span> <span class="n">upper</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
+        <span class="n">mu</span><span class="p">,</span> <span class="n">sigma</span> <span class="o">=</span> <span class="mf">0.7</span><span class="p">,</span> <span class="mf">0.3</span>
+        <span class="n">iii</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="ow">in</span> <span class="n">FG</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="n">iii</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">FG</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">][</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="o">.</span><span class="n">truncnorm</span><span class="o">.</span><span class="n">rvs</span><span class="p">(</span>
+                <span class="p">(</span><span class="n">lower</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="p">(</span><span class="n">upper</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">sigma</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">iii</span><span class="p">,</span> <span class="s1">&#39;Edges&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">FG</span></div>
+
+
+
+<div class="viewcode-block" id="RandomGraphGenerator">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.RandomGraphGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RandomGraphGenerator</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph generator producing independent random contact graphs per layer.</span>
+
+<span class="sd">    For each of the 14 default layers a separate Barabasi-Albert graph is</span>
+<span class="sd">    generated (with exponential degree thinning) and each edge is assigned a</span>
+<span class="sd">    truncated-normal weight in ``(0, 1)`` with mean ``0.7`` and</span>
+<span class="sd">    std-dev ``0.3``.  Layer-level transmission probabilities are also drawn</span>
+<span class="sd">    from the same truncated-normal distribution.  All per-layer graphs are</span>
+<span class="sd">    merged into the shared MultiGraph ``self.G``.</span>
+
+<span class="sd">    The resulting graph has a mean degree of approximately 13 per layer.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        num_nodes (int): Number of nodes in each per-layer graph.</span>
+<span class="sd">            Defaults to ``10000``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to</span>
+<span class="sd">            :class:`GraphGenerator`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_nodes</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="n">num_nodes</span>
+
+        <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="p">:</span>
+            <span class="c1"># generate random connections</span>
+            <span class="n">baseGraph</span> <span class="o">=</span> <span class="n">nx</span><span class="o">.</span><span class="n">barabasi_albert_graph</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">m</span><span class="o">=</span><span class="mi">9</span><span class="p">)</span>
+            <span class="n">FG</span> <span class="o">=</span> <span class="n">custom_exponential_graph</span><span class="p">(</span><span class="n">baseGraph</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+            <span class="c1"># generate random weights from trunc norm</span>
+            <span class="n">lower</span><span class="p">,</span> <span class="n">upper</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
+            <span class="n">mu</span><span class="p">,</span> <span class="n">sigma</span> <span class="o">=</span> <span class="mf">0.7</span><span class="p">,</span> <span class="mf">0.3</span>
+            <span class="k">for</span> <span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="ow">in</span> <span class="n">FG</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+                <span class="n">FG</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">][</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="o">.</span><span class="n">truncnorm</span><span class="o">.</span><span class="n">rvs</span><span class="p">(</span>
+                    <span class="p">(</span><span class="n">lower</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="p">(</span><span class="n">upper</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">sigma</span><span class="p">)</span>
+                <span class="n">FG</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">][</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">l</span>
+            <span class="c1"># other params of the graph</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">l</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="o">.</span><span class="n">truncnorm</span><span class="o">.</span><span class="n">rvs</span><span class="p">(</span>
+                <span class="p">(</span><span class="n">lower</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="p">(</span><span class="n">upper</span> <span class="o">-</span> <span class="n">mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">sigma</span><span class="p">)</span>
+            <span class="n">FG</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_prob&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span><span class="p">[</span><span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="n">FG</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span>
+<span class="c1">#            dot = nx.nx_pydot.to_pydot(FG)</span>
+<span class="c1">#            print(dot)</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">add_edges_from</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span><span class="p">[</span><span class="n">l</span><span class="p">]</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+
+<div class="viewcode-block" id="RandomGraphGenerator.as_dict_of_graphs">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.RandomGraphGenerator.as_dict_of_graphs">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">as_dict_of_graphs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the pre-built per-layer graph dictionary.</span>
+
+<span class="sd">        Overrides :meth:`GraphGenerator.as_dict_of_graphs` to return the</span>
+<span class="sd">        dictionary built during ``__init__`` rather than rebuilding it.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            dict[str, networkx.Graph]: Mapping of layer name to its</span>
+<span class="sd">            single-layer graph.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">Graphs</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="PickleGraphGenerator">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.PickleGraphGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">PickleGraphGenerator</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph generator that restores a graph from a NetworkX pickle file.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path_to_pickle (str): Path to the pickle file containing a</span>
+<span class="sd">            previously serialized NetworkX graph.  Defaults to</span>
+<span class="sd">            ``&#39;graph.pickle&#39;``.</span>
+<span class="sd">        **kwardgs: Additional keyword arguments (currently unused).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path_to_pickle</span><span class="o">=</span><span class="s1">&#39;graph.pickle&#39;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwardgs</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">read_pickle</span><span class="p">(</span><span class="n">path_to_pickle</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="CSVGraphGenerator">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.CSVGraphGenerator">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">CSVGraphGenerator</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph generator that builds a multi-layer graph from CSV files.</span>
+
+<span class="sd">    Reads nodes, edges and layer definitions from three separate CSV files</span>
+<span class="sd">    and populates the underlying NetworkX MultiGraph.  Duplicate edges (same</span>
+<span class="sd">    ``type``, ``subtype``, endpoint pair and weight) are removed in debug</span>
+<span class="sd">    mode.</span>
+
+<span class="sd">    Class Attributes:</span>
+<span class="sd">        layer_names (list): Starts empty; populated from the layers CSV.</span>
+<span class="sd">        layer_probs (list): Starts empty; populated from the layers CSV.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path_to_nodes (str): Path to the nodes CSV file.  Defaults to</span>
+<span class="sd">            ``&#39;nodes.csv&#39;``.</span>
+<span class="sd">        path_to_edges (str): Path to the edges CSV file.  Defaults to</span>
+<span class="sd">            ``&#39;edges.csv&#39;``.  Required columns: ``vertex1``, ``vertex2``,</span>
+<span class="sd">            ``type``, ``subtype``, ``weight``.</span>
+<span class="sd">        path_to_layers (str): Path to the layer-definition CSV file.</span>
+<span class="sd">            Defaults to ``&#39;etypes.csv&#39;``.  Required columns: ``id``,</span>
+<span class="sd">            ``name``, ``weight``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to</span>
+<span class="sd">            :class:`GraphGenerator`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">layer_names</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">layer_probs</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path_to_nodes</span><span class="o">=</span><span class="s1">&#39;nodes.csv&#39;</span><span class="p">,</span> <span class="n">path_to_edges</span><span class="o">=</span><span class="s1">&#39;edges.csv&#39;</span><span class="p">,</span> <span class="n">path_to_layers</span><span class="o">=</span><span class="s1">&#39;etypes.csv&#39;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+        <span class="n">csv_hacking</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;na_values&#39;</span><span class="p">:</span> <span class="s1">&#39;undef&#39;</span><span class="p">,</span> <span class="s1">&#39;skipinitialspace&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+        <span class="n">nodes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_nodes</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+        <span class="n">edges</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_edges</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_layers</span><span class="p">,</span> <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+
+        <span class="n">indexNames</span> <span class="o">=</span> <span class="n">edges</span><span class="p">[</span><span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex1&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex2&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">index</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indexNames</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Warning: dropping self edges!!!! </span><span class="si">{</span><span class="n">indexNames</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="c1">#            print(edges[edges[&#39;vertex1&#39;] == edges[&#39;vertex2&#39;]])</span>
+            <span class="n">edges</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">indexNames</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1">#        print(layers)</span>
+        <span class="c1"># fill the layers</span>
+<span class="c1">#        layer_names = tuple(zip(layers.loc(&#39;id&#39;), layers.loc(&#39;id2&#39;)))</span>
+        <span class="n">layers_to_add</span> <span class="o">=</span> <span class="n">layers</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s1">&#39;list&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span> <span class="o">=</span> <span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span>
+<span class="c1">#        print(layers_names)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_probs</span> <span class="o">=</span> <span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_ids</span> <span class="o">=</span> <span class="n">layers_to_add</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_names&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_names</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_probs</span>
+
+        <span class="c1"># fill the nodes</span>
+        <span class="n">nodes_to_add</span> <span class="o">=</span> <span class="n">nodes</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s1">&#39;records&#39;</span><span class="p">)</span>
+        <span class="n">idx_s</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">nodes_to_add</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">add_nodes_from</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">idx_s</span><span class="p">,</span> <span class="n">nodes_to_add</span><span class="p">))</span>
+
+        <span class="c1"># fill the edges</span>
+        <span class="c1"># get rid of duplicate edges</span>
+        <span class="k">if</span> <span class="n">__debug__</span><span class="p">:</span>
+                    <span class="c1"># fill the edges</span>
+            <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;e&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">edges</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+                <span class="k">lambda</span> <span class="n">row</span><span class="p">:</span> <span class="p">(</span>
+                    <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">))</span>
+                    <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">)</span> <span class="o">&lt;</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">)</span>
+                    <span class="k">else</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex2</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">vertex1</span><span class="p">))</span>
+                <span class="p">),</span>
+                <span class="n">axis</span><span class="o">=</span><span class="mi">1</span>
+            <span class="p">)</span>
+            <span class="n">edges</span><span class="o">.</span><span class="n">drop_duplicates</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">subset</span><span class="o">=</span><span class="p">[</span>
+                                  <span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;subtype&quot;</span><span class="p">,</span> <span class="s2">&quot;e&quot;</span><span class="p">,</span> <span class="s2">&quot;weight&quot;</span><span class="p">])</span>
+            <span class="n">edges</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;e&quot;</span><span class="p">],</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="n">edges_to_add</span> <span class="o">=</span> <span class="n">edges</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s1">&#39;list&#39;</span><span class="p">)</span>
+        <span class="n">froms</span> <span class="o">=</span> <span class="n">edges_to_add</span><span class="p">[</span><span class="s1">&#39;vertex1&#39;</span><span class="p">]</span>
+        <span class="n">tos</span> <span class="o">=</span> <span class="n">edges_to_add</span><span class="p">[</span><span class="s1">&#39;vertex2&#39;</span><span class="p">]</span>
+        <span class="n">datas</span> <span class="o">=</span> <span class="p">[{</span>
+            <span class="n">k</span><span class="p">:</span> <span class="n">v</span>
+            <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">d</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">k</span> <span class="o">!=</span> <span class="s1">&#39;vertex1&#39;</span> <span class="ow">and</span> <span class="n">k</span> <span class="o">!=</span> <span class="s1">&#39;vertex2&#39;</span>
+        <span class="p">}</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">edges</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s1">&#39;records&#39;</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">add_edges_from</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">froms</span><span class="p">,</span> <span class="n">tos</span><span class="p">,</span> <span class="n">datas</span><span class="p">))</span>
+
+<div class="viewcode-block" id="CSVGraphGenerator.__str__">
+<a class="viewcode-back" href="../src_modules.html#graph_gen.CSVGraphGenerator.__str__">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a human-readable string listing all edges with their data.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            str: Newline-separated representation of every edge in ``self.G``</span>
+<span class="sd">            including edge attribute dictionaries.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">edges</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="kc">True</span><span class="p">)])</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>graph_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>graph_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for graph_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Graph analysis utilities for the MAIS simulation.</span>
+
+<span class="sd">This module provides helper functions for computing structural properties of</span>
+<span class="sd">the contact graph used in the simulation, such as node degree statistics</span>
+<span class="sd">derived from edge-probability data.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.sparse</span><span class="w"> </span><span class="kn">import</span> <span class="n">csr_matrix</span><span class="p">,</span> <span class="n">lil_matrix</span>
+
+
+<div class="viewcode-block" id="compute_mean_degree">
+<a class="viewcode-back" href="../src_modules.html#graph_utils.compute_mean_degree">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_mean_degree</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the mean expected number of contacts (degree) for a set of nodes.</span>
+<span class="sd">    </span>
+<span class="sd">    For each pair of nodes in the graph, the function aggregates all edges</span>
+<span class="sd">    connecting them to compute the probability that *at least one* contact</span>
+<span class="sd">    occurs on any layer. This probability is stored in a dense sparse matrix,</span>
+<span class="sd">    and the expected degree of each node in ``nodes`` is the row sum of that</span>
+<span class="sd">    matrix. The mean is then taken over all nodes in ``nodes``.</span>
+<span class="sd">    </span>
+<span class="sd">    The computation iterates over all node pairs, so it is suited for analysis</span>
+<span class="sd">    rather than performance-critical simulation paths.</span>
+<span class="sd">    </span>
+<span class="sd">    Args:</span>
+<span class="sd">        graph (LightGraph): The contact graph object. Must expose:</span>
+<span class="sd">            - ``graph.num_nodes`` (int): Total number of nodes.</span>
+<span class="sd">            - ``graph.nodes`` (iterable): All node indices.</span>
+<span class="sd">            - ``graph.A`` (array-like): Adjacency structure mapping a node</span>
+<span class="sd">            pair ``(n1, n2)`` to an index into ``graph.edges_repo``</span>
+<span class="sd">            (``0`` means no edge).</span>
+<span class="sd">            - ``graph.edges_repo`` (list): Repository of edge collections</span>
+<span class="sd">            keyed by the index returned from ``graph.A``.</span>
+<span class="sd">            - ``graph.get_edges_probs(edges)`` (callable): Returns an array</span>
+<span class="sd">            of transmission probabilities for the given edges.</span>
+<span class="sd">        nodes (iterable): Subset of node indices for which the mean degree is</span>
+<span class="sd">            computed.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Mean expected number of contacts per node over the given</span>
+<span class="sd">        ``nodes``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># first create matrix of all probs of contacts</span>
+    <span class="c1"># (can be optimised, I do not care about time now - so for all nodes)</span>
+    <span class="n">graph_matrix</span> <span class="o">=</span> <span class="n">lil_matrix</span><span class="p">((</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+    
+    <span class="k">for</span> <span class="n">n1</span> <span class="ow">in</span> <span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">n2</span> <span class="ow">in</span> <span class="n">graph</span><span class="o">.</span><span class="n">nodes</span><span class="p">:</span>
+            <span class="n">index</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">n1</span><span class="p">,</span> <span class="n">n2</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">index</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span> <span class="c1"># no edge</span>
+                <span class="k">continue</span>
+            <span class="n">edges_repo</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">edges_repo</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+            <span class="n">probs</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">get_edges_probs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">edges_repo</span><span class="p">))</span>
+            <span class="n">probs</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">probs</span>
+            <span class="n">graph_matrix</span><span class="p">[</span><span class="n">n1</span><span class="p">,</span> <span class="n">n2</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">probs</span><span class="o">.</span><span class="n">prod</span><span class="p">()</span>
+    <span class="n">graph_matrix</span> <span class="o">=</span> <span class="n">csr_matrix</span><span class="p">(</span><span class="n">graph_matrix</span><span class="p">)</span>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">node_degree</span><span class="p">(</span><span class="n">node</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">graph_matrix</span><span class="p">[</span><span class="n">node</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="n">degrees</span> <span class="o">=</span> <span class="p">[</span><span class="n">node_degree</span><span class="p">(</span><span class="n">node</span><span class="p">)</span> <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">]</span>
+    <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">degrees</span><span class="p">)</span><span class="o">/</span><span class="nb">len</span><span class="p">(</span><span class="n">degrees</span><span class="p">)</span></div>
+
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>

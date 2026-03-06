@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>prob_infection &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>prob_infection</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="Top">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for prob_infection</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Network contact and infection probability utilities.</span>
+
+<span class="sd">This module provides standalone functions that compute which edges become</span>
+<span class="sd">&quot;active&quot; on a given day and whether susceptible nodes are exposed via those</span>
+<span class="sd">active edges.  Two main entry points are provided:</span>
+
+<span class="sd">* :func:`prob_of_contact` – the current production implementation.</span>
+<span class="sd">* :func:`prob_of_contact_old` – a legacy implementation retained for</span>
+<span class="sd">  reference.</span>
+
+<span class="sd">Helper functions :func:`select_active_edges`, :func:`archive_active_edges`,</span>
+<span class="sd">and :func:`get_relevant_edges` are used internally by both entry points.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy_indexed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">npi</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">models.states</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
+
+
+<div class="viewcode-block" id="select_active_edges">
+<a class="viewcode-back" href="../src_modules.html#prob_infection.select_active_edges">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">select_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Stochastically select active (contact) edges between two node sets.</span>
+
+<span class="sd">    For each edge connecting a node in *source_candidate_states* to a node in</span>
+<span class="sd">    *dest_candidate_states*, flips a biased coin with the edge&#39;s daily-contact</span>
+<span class="sd">    probability.  Returns only edges where contact actually occurred.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The active simulation model instance (must expose</span>
+<span class="sd">            ``memberships``, ``graph``, ``num_nodes``).</span>
+<span class="sd">        source_states (list of int): States whose nodes can become exposed</span>
+<span class="sd">            (used for final filtering, not edge selection).</span>
+<span class="sd">        source_candidate_states (list of int): Superset of *source_states*</span>
+<span class="sd">            used for initial candidate-edge selection.</span>
+<span class="sd">        dest_states (list of int): Infectious states (used for filtering).</span>
+<span class="sd">        dest_candidate_states (list of int): Superset of *dest_states* used</span>
+<span class="sd">            for initial candidate-edge selection.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: ``(active_edges, active_edges_dirs)`` where both are</span>
+<span class="sd">        ``numpy.ndarray`` of shape ``(num_active_edges,)``, or</span>
+<span class="sd">        ``(None, None)`` if no edges are active.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">dest_states</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span> <span class="ow">and</span> <span class="nb">type</span><span class="p">(</span><span class="n">source_states</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span>
+
+    <span class="c1"># 1. select active edges</span>
+    <span class="c1"># candidates for active edges are edges between source_candidate_states and dest_candidate_states</span>
+    <span class="c1"># source (the one who is going to be infected)</span>
+    <span class="c1"># dest (the one who can offer infection)</span>
+
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">source_candidate_flags</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_candidate_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">source_candidate_states</span><span class="p">),</span> <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1"># source_candidate_indices = source_candidate_flags.nonzero()[0]</span>
+
+    <span class="n">dest_candidate_flags</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_candidate_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">dest_candidate_states</span><span class="p">),</span> <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1"># dest_candidate_indices = dest_candidate_flags.nonzero()[0]</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Create flags </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">possibly_active_edges</span><span class="p">,</span> <span class="n">possibly_active_edges_dirs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges</span><span class="p">(</span>
+        <span class="n">source_candidate_flags</span><span class="p">,</span>
+        <span class="n">dest_candidate_flags</span>
+    <span class="p">)</span>
+    <span class="n">num_possibly_active_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">possibly_active_edges</span><span class="p">)</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Select possibly active </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">num_possibly_active_edges</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="c1"># for each possibly active edge flip coin</span>
+    <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num_possibly_active_edges</span><span class="p">)</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random numbers: </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="c1"># edges probs</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_probs</span><span class="p">(</span><span class="n">possibly_active_edges</span><span class="p">)</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Get intensities: </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">active_indices</span> <span class="o">=</span> <span class="p">(</span><span class="n">r</span> <span class="o">&lt;</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">num_active_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_indices</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">num_active_edges</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="n">active_edges</span> <span class="o">=</span> <span class="n">possibly_active_edges</span><span class="p">[</span><span class="n">active_indices</span><span class="p">]</span>
+    <span class="n">active_edges_dirs</span> <span class="o">=</span> <span class="n">possibly_active_edges_dirs</span><span class="p">[</span><span class="n">active_indices</span><span class="p">]</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Select active edges: </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span></div>
+
+
+
+<div class="viewcode-block" id="archive_active_edges">
+<a class="viewcode-back" href="../src_modules.html#prob_infection.archive_active_edges">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">archive_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Record today&#39;s active edges in the model&#39;s contact-history buffer.</span>
+
+<span class="sd">    Retrieves source and destination node indices for each active edge and</span>
+<span class="sd">    appends them (along with edge type) to ``model.contact_history``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The active simulation model instance.</span>
+<span class="sd">        active_edges (numpy.ndarray): Indices of today&#39;s active edges.</span>
+<span class="sd">        active_edges_dirs (numpy.ndarray): Direction flags for each edge</span>
+<span class="sd">            (``True`` = canonical direction, ``False`` = reversed).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="c1"># get source and dest nodes for active edges</span>
+    <span class="c1"># source and dest met today, dest is possibly infectious, source was possibly infected</span>
+    <span class="n">source_nodes</span><span class="p">,</span> <span class="n">dest_nodes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+        <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">)</span>
+    <span class="c1"># add to contact_history (infectious node goes first!!!)</span>
+    <span class="n">contact_indices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">dest_nodes</span><span class="p">,</span> <span class="n">source_nodes</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">))</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">contact_history</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contact_indices</span><span class="p">)</span>
+
+    <span class="c1"># uncoment for statistics</span>
+    <span class="c1"># for dest_node, source_node, _ in contact_indices:</span>
+    <span class="c1">#     model.nodes_inf_contacts[source_node] += 1</span>
+
+    <span class="c1"># if model.t == 6:</span>
+    <span class="c1">#     contact_numbers = {}</span>
+    <span class="c1">#     for e in active_edges:</span>
+    <span class="c1">#         layer_number = model.graph.get_layer_for_edge(e)</span>
+    <span class="c1">#         contact_numbers[layer_number] = contact_numbers.get(</span>
+    <span class="c1">#             layer_number, 0) + 1</span>
+    <span class="c1">#     contact_num_str = &#39;, &#39;.join([f&#39;{layer_type}:{number}&#39; for layer_type, number in contact_numbers.items()])</span>
+    <span class="c1">#     logging.debug(f&quot;DBG contact numbers {contact_num_str}&quot;)</span>
+
+    <span class="c1"># print(&quot;Potkali se u kolina:&quot;, contact_indices)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Todays contact num:  </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">contact_indices</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Archive active edges: </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="get_relevant_edges">
+<a class="viewcode-back" href="../src_modules.html#prob_infection.get_relevant_edges">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_relevant_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Filter active edges to those connecting relevant source/destination states.</span>
+
+<span class="sd">    From the set of *active_edges* retains only those where the source node is</span>
+<span class="sd">    in one of *source_states* and the destination node is in one of</span>
+<span class="sd">    *dest_states*.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The active simulation model instance.</span>
+<span class="sd">        active_edges (numpy.ndarray): Indices of today&#39;s active edges.</span>
+<span class="sd">        active_edges_dirs (numpy.ndarray): Direction flags for *active_edges*.</span>
+<span class="sd">        source_states (list of int): States eligible to be exposed.</span>
+<span class="sd">        dest_states (list of int): Infectious states.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: ``(active_relevant_edges, active_relevant_edges_dirs)`` or</span>
+<span class="sd">        ``(None, None)`` if no relevant edges remain after filtering.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># restrict the selection to only relevant states</span>
+    <span class="c1"># (ie. candidates can be both E and I, relevant are only I)</span>
+    <span class="c1"># candidates are those who will be possibly relevant in future</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">dest_flags</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">dest_states</span><span class="p">),</span> <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">source_flags</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">source_states</span><span class="p">),</span> <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="n">relevant_edges</span><span class="p">,</span> <span class="n">relevant_edges_dirs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges</span><span class="p">(</span>
+        <span class="n">source_flags</span><span class="p">,</span> <span class="n">dest_flags</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">relevant_edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="c1"># get intersection</span>
+    <span class="n">active_relevant_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">intersect1d</span><span class="p">(</span><span class="n">active_edges</span><span class="p">,</span> <span class="n">relevant_edges</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_relevant_edges</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+    <span class="c1"># print(active_relevant_edges.shape)</span>
+    <span class="c1"># print(relevant_edges.shape)</span>
+    <span class="c1"># print((active_relevant_edges[:, np.newaxis] == relevant_edges).shape)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># this causes exceptin, but only sometimes ???</span>
+        <span class="c1"># where_indices = (</span>
+        <span class="c1">#    active_relevant_edges[:, np.newaxis] == relevant_edges).nonzero()[1]</span>
+        <span class="c1"># lets try npi instead</span>
+        <span class="n">where_indices</span> <span class="o">=</span> <span class="n">npi</span><span class="o">.</span><span class="n">indices</span><span class="p">(</span><span class="n">relevant_edges</span><span class="p">,</span> <span class="n">active_relevant_edges</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">AttributeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Lucky we are ...&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">active_relevant_edges</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;active_relevant_edges&quot;</span><span class="p">,</span> <span class="n">active_relevant_edges</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">relevant_edges</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;relevant_edges&quot;</span><span class="p">,</span> <span class="n">relevant_edges</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">active_relevant_edges</span><span class="p">[:,</span> <span class="n">np</span><span class="o">.</span><span class="n">newaxis</span><span class="p">]</span> <span class="o">==</span> <span class="n">relevant_edges</span><span class="p">)</span>
+        <span class="n">exit</span><span class="p">()</span>
+    <span class="c1">#        print(where_indices, len(where_indices))</span>
+    <span class="c1"># always one index! (sources and dest must be disjunct)</span>
+    <span class="n">active_relevant_edges_dirs</span> <span class="o">=</span> <span class="n">relevant_edges_dirs</span><span class="p">[</span><span class="n">where_indices</span><span class="p">]</span>
+    <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Get relevant active edges: </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">active_relevant_edges</span><span class="p">,</span> <span class="n">active_relevant_edges_dirs</span></div>
+
+
+
+<div class="viewcode-block" id="prob_of_contact_old">
+<a class="viewcode-back" href="../src_modules.html#prob_infection.prob_of_contact_old">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact_old</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Legacy implementation of the contact-probability computation (abandoned).</span>
+
+<span class="sd">    Retained for historical reference only.  Prefer :func:`prob_of_contact`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The active simulation model instance.</span>
+<span class="sd">        source_states (list of int): States that can be exposed.</span>
+<span class="sd">        source_candidate_states (list of int): Candidate source states for</span>
+<span class="sd">            edge selection.</span>
+<span class="sd">        dest_states (list of int): Infectious states.</span>
+<span class="sd">        dest_candidate_states (list of int): Candidate destination states for</span>
+<span class="sd">            edge selection.</span>
+<span class="sd">        beta (numpy.ndarray): Per-node non-family transmission rate,</span>
+<span class="sd">            shape ``(num_nodes, 1)``.</span>
+<span class="sd">        beta_in_family (numpy.ndarray): Per-node family transmission rate,</span>
+<span class="sd">            shape ``(num_nodes, 1)``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Per-node binary exposure indicator, shape</span>
+<span class="sd">        ``(num_nodes, 1)``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">main_s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span> <span class="o">=</span> <span class="n">select_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
+                                                          <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">active_edges</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># we have no active edges today</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+    <span class="c1">#archive_active_edges(model, active_edges, active_edges_dirs)</span>
+
+    <span class="n">active_relevant_edges</span><span class="p">,</span> <span class="n">active_relevant_edges_dirs</span> <span class="o">=</span> <span class="n">get_relevant_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
+                                                                           <span class="n">active_edges</span><span class="p">,</span>
+                                                                           <span class="n">active_edges_dirs</span><span class="p">,</span>
+                                                                           <span class="n">source_states</span><span class="p">,</span>
+                                                                           <span class="n">dest_states</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">active_relevant_edges</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">intensities</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_intensities</span><span class="p">(</span>
+        <span class="n">active_relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">relevant_sources</span><span class="p">,</span> <span class="n">relevant_dests</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+        <span class="n">active_relevant_edges</span><span class="p">,</span> <span class="n">active_relevant_edges_dirs</span><span class="p">)</span>
+
+    <span class="n">is_family_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_family_edge</span><span class="p">(</span>
+        <span class="n">active_relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="kc">False</span><span class="p">:</span>
+        <span class="n">is_class_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_class_edge</span><span class="p">(</span>
+            <span class="n">active_relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">is_pub_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_pub_edge</span><span class="p">(</span>
+            <span class="n">active_relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">is_super_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_super_edge</span><span class="p">(</span>
+            <span class="n">active_relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">is_family_edge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="o">.</span><span class="n">reduce</span><span class="p">((</span><span class="n">is_family_edge</span><span class="p">,</span>
+                                               <span class="n">is_class_edge</span><span class="p">,</span>
+                                               <span class="n">is_super_edge</span><span class="p">,</span>
+                                               <span class="n">is_pub_edge</span><span class="p">))</span>
+
+    <span class="c1">#        assert len(relevant_sources) == len(set(relevant_sources))</span>
+    <span class="c1"># TOD beta - b_ij</span>
+    <span class="c1"># new beta depands on the one who is going to be infected</span>
+    <span class="c1">#        b_intensities = beta[relevant_sources]</span>
+    <span class="c1">#        b_f_intensities = beta_in_family[relevant_sources]</span>
+
+    <span class="c1"># reduce asymptomatic</span>
+    <span class="n">is_A</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">][</span><span class="n">relevant_dests</span><span class="p">]</span>
+
+    <span class="n">b_original_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">beta_in_family</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_A</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="n">is_A</span>
+    <span class="p">)</span>
+    <span class="n">b_reduced_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">beta</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_A</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="n">is_A</span>
+    <span class="p">)</span>
+
+    <span class="n">b_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">b_original_intensities</span> <span class="o">*</span> <span class="n">is_family_edge</span> <span class="o">+</span>
+        <span class="n">b_reduced_intensities</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_family_edge</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="k">assert</span> <span class="n">b_intensities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">intensities</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="c1"># relevant_sources_unique, unique_indices = np.unique(</span>
+    <span class="c1">#     relevant_sources, return_inverse=True)</span>
+
+    <span class="c1"># print(len(relevant_sources_unique))</span>
+    <span class="c1"># print(b_intensities, b_intensities.shape)</span>
+    <span class="c1"># print(active_relevant_edges, active_relevant_edges.shape)</span>
+    <span class="c1"># exit()</span>
+
+    <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">b_intensities</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># print(b_intensities.shape)</span>
+    <span class="c1"># print(intensities.shape)</span>
+    <span class="c1"># print((b_intensities*intensities).shape)</span>
+    <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">b_intensities</span> <span class="o">*</span> <span class="n">intensities</span><span class="p">)</span>
+
+    <span class="c1">#        print(is_exposed, is_exposed.shape)</span>
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">is_exposed</span> <span class="o">==</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">is_exposed</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+    <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="n">relevant_sources</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="n">ret</span><span class="p">[</span><span class="n">exposed_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="n">sourced_nodes</span> <span class="o">=</span> <span class="n">relevant_dests</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">successfull_source_of_infection</span><span class="p">[</span><span class="n">sourced_nodes</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">succesfull_edges</span> <span class="o">=</span> <span class="n">active_relevant_edges</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">successfull_layers</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_layer_for_edge</span><span class="p">(</span><span class="n">succesfull_edges</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">successfull_layers</span><span class="p">:</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">stat_successfull_layers</span><span class="p">[</span><span class="n">e</span><span class="p">][</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">main_e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PROBS OF CONTACT </span><span class="si">{</span><span class="n">main_e</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">main_s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ret</span></div>
+
+    <span class="c1"># no_infection = (1 - b_intensities * intensities).ravel()</span>
+
+    <span class="c1"># res = np.ones(len(relevant_sources_unique), dtype=&#39;float32&#39;)</span>
+    <span class="c1"># for i in range(len(unique_indices)):</span>
+    <span class="c1">#     res[unique_indices[i]] = res[unique_indices[i]]*no_infection[i]</span>
+    <span class="c1"># prob_of_no_infection = res</span>
+    <span class="c1"># # prob_of_no_infection2 = np.fromiter((np.prod(no_infection, where=(relevant_sources==v).T)</span>
+    <span class="c1"># #                         for v in relevant_sources_unique), dtype=&#39;float32&#39;)</span>
+
+    <span class="c1"># result = np.zeros(model.num_nodes)</span>
+    <span class="c1"># result[relevant_sources_unique] = 1 - prob_of_no_infection</span>
+    <span class="c1"># e = time.time()</span>
+    <span class="c1"># print(&quot;Comp probability&quot;, e-s)</span>
+    <span class="c1">#        return result.reshape(model.num_nodes, 1)</span>
+
+
+<div class="viewcode-block" id="prob_of_contact">
+<a class="viewcode-back" href="../src_modules.html#prob_infection.prob_of_contact">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate per-node exposure via stochastic edge activation (production).</span>
+
+<span class="sd">    For each graph edge, independently activates it with the edge&#39;s daily</span>
+<span class="sd">    contact probability.  For active edges connecting a susceptible source to</span>
+<span class="sd">    an infectious destination, draws a Bernoulli trial with the effective</span>
+<span class="sd">    transmission rate (accounting for family vs. non-family edges and</span>
+<span class="sd">    asymptomatic reduction).  Returns a binary indicator vector: 1 for each</span>
+<span class="sd">    node that was exposed on this day.</span>
+
+<span class="sd">    *source_candidate_states* and *dest_candidate_states* are accepted for</span>
+<span class="sd">    backward compatibility but are no longer used; the function queries all</span>
+<span class="sd">    edges.</span>
+
+<span class="sd">    Updates the following model statistics:</span>
+
+<span class="sd">    * ``model.contact_history`` – active edge contacts.</span>
+<span class="sd">    * ``model.successfull_source_of_infection`` – per-node successful</span>
+<span class="sd">      infection counts.</span>
+<span class="sd">    * ``model.stat_successfull_layers`` – per-layer successful transmission</span>
+<span class="sd">      counts.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The active simulation model instance.</span>
+<span class="sd">        source_states (list of int): States that can become exposed.</span>
+<span class="sd">        source_candidate_states (list of int): Unused (backward compat.).</span>
+<span class="sd">        dest_states (list of int): Infectious states.</span>
+<span class="sd">        dest_candidate_states (list of int): Unused (backward compat.).</span>
+<span class="sd">        beta (numpy.ndarray): Per-node non-family transmission rate,</span>
+<span class="sd">            shape ``(num_nodes, 1)``.</span>
+<span class="sd">        beta_in_family (numpy.ndarray): Per-node family transmission rate,</span>
+<span class="sd">            shape ``(num_nodes, 1)``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Per-node binary exposure indicator, shape</span>
+<span class="sd">        ``(num_nodes, 1)``.  Value is 1 if the node was newly exposed, 0</span>
+<span class="sd">        otherwise.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># source_states - states that can be infected</span>
+    <span class="c1"># dest_states - states that are infectious</span>
+
+    <span class="n">main_s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+    <span class="n">edges_probs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_all_edges_probs</span><span class="p">()</span>
+    <span class="n">num_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges_probs</span><span class="p">)</span>
+
+    <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">num_edges</span><span class="p">)</span>
+    <span class="n">active_edges</span> <span class="o">=</span> <span class="p">(</span><span class="n">r</span> <span class="o">&lt;</span> <span class="n">edges_probs</span><span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;active_edges </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">active_edges</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">source_nodes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+    <span class="n">dest_nodes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+    <span class="n">types</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">active_edges</span><span class="p">]</span>
+    <span class="n">contact_info</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">source_nodes</span><span class="p">,</span> <span class="n">dest_nodes</span><span class="p">]),</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">dest_nodes</span><span class="p">,</span> <span class="n">source_nodes</span><span class="p">]),</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">types</span><span class="p">,</span> <span class="n">types</span><span class="p">])</span>
+    <span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">contact_history</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contact_info</span><span class="p">)</span>
+
+    <span class="c1"># take them in both directions</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">active_edges</span><span class="p">)</span>
+    <span class="n">active_edges</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">])</span>
+    <span class="n">active_edges_dirs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+    <span class="n">active_edges_dirs</span><span class="p">[</span><span class="n">n</span><span class="p">:]</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="n">source_nodes</span><span class="p">,</span> <span class="n">dest_nodes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+        <span class="n">active_edges</span><span class="p">,</span>
+        <span class="n">active_edges_dirs</span>
+    <span class="p">)</span>
+
+    <span class="c1"># is source in feasible state?</span>
+    <span class="n">is_relevant_source</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_states</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">source_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="n">source_states</span><span class="p">[</span><span class="mi">1</span><span class="p">:]:</span>
+        <span class="n">is_relevant_source</span> <span class="o">+=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">state</span><span class="p">,</span> <span class="n">source_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+
+    <span class="c1"># is dest in feasible state?</span>
+    <span class="n">is_relevant_dest</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_states</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dest_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="n">dest_states</span><span class="p">[</span><span class="mi">1</span><span class="p">:]:</span>
+        <span class="n">is_relevant_dest</span> <span class="o">+=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">state</span><span class="p">,</span> <span class="n">dest_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+
+    <span class="n">is_relevant_edge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+        <span class="n">is_relevant_source</span><span class="p">,</span>
+        <span class="n">is_relevant_dest</span>
+    <span class="p">)</span>
+
+    <span class="c1">##########################</span>
+    <span class="n">relevant_edges</span> <span class="o">=</span> <span class="n">active_edges</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">]</span>
+
+    <span class="n">intensities</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_intensities</span><span class="p">(</span>
+        <span class="n">relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">relevant_sources</span><span class="p">,</span> <span class="n">relevant_dests</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_edges_nodes</span><span class="p">(</span>
+        <span class="n">relevant_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">[</span><span class="n">is_relevant_edge</span><span class="p">])</span>
+
+    <span class="n">is_family_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_family_edge</span><span class="p">(</span>
+        <span class="n">relevant_edges</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># reduce asymptomatic</span>
+    <span class="n">is_A</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">][</span><span class="n">relevant_dests</span><span class="p">]</span>
+
+    <span class="n">b_original_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">beta_in_family</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_A</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="n">is_A</span>
+    <span class="p">)</span>
+    <span class="n">b_reduced_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">beta</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_A</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="p">[</span><span class="n">relevant_sources</span><span class="p">]</span> <span class="o">*</span> <span class="n">is_A</span>
+    <span class="p">)</span>
+
+    <span class="n">b_intensities</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">b_original_intensities</span> <span class="o">*</span> <span class="n">is_family_edge</span> <span class="o">+</span>
+        <span class="n">b_reduced_intensities</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">is_family_edge</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="k">assert</span> <span class="n">b_intensities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">intensities</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">b_intensities</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">b_intensities</span> <span class="o">*</span> <span class="n">intensities</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">is_exposed</span> <span class="o">==</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+    <span class="n">is_exposed</span> <span class="o">=</span> <span class="n">is_exposed</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+    <span class="n">exposed_nodes</span> <span class="o">=</span> <span class="n">relevant_sources</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">ret</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="n">ret</span><span class="p">[</span><span class="n">exposed_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="c1"># save stats</span>
+    <span class="n">sourced_nodes</span> <span class="o">=</span> <span class="n">relevant_dests</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">successfull_source_of_infection</span><span class="p">[</span><span class="n">sourced_nodes</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">succesfull_edges</span> <span class="o">=</span> <span class="n">relevant_edges</span><span class="p">[</span><span class="n">is_exposed</span><span class="p">]</span>
+    <span class="n">successfull_layers</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_layer_for_edge</span><span class="p">(</span><span class="n">succesfull_edges</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">successfull_layers</span><span class="p">:</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">stat_successfull_layers</span><span class="p">[</span><span class="n">e</span><span class="p">][</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">main_e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PROBS OF CONTACT </span><span class="si">{</span><span class="n">main_e</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">main_s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ret</span></div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    </div>
+  </body>
+</html>
