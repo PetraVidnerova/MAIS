@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>sparse_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>sparse_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for sparse_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Sparse-matrix utility functions for the MAIS simulation.</span>
+
+<span class="sd">This module is no longer used in current versions of the model. It was</span>
+<span class="sd">originally used when a contact graph was compressed into a sparse matrix</span>
+<span class="sd">where multi-edges were aggregated into single weighted entries.</span>
+
+<span class="sd">The functions operate on SciPy CSR/CSC sparse matrices and provide</span>
+<span class="sd">element-wise row/column scaling, row/column product aggregation, and a</span>
+<span class="sd">specialised element-wise multiplication that treats structurally-zero entries</span>
+<span class="sd">as ones (useful for probability-complement arithmetic).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="c1"># this is not used in a new versions of a model</span>
+<span class="c1"># was used when a grah was compressed into a matrix (multi-edges were aggregated)</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy.sparse</span> <span class="k">as</span> <span class="nn">sparse</span>
+
+
+<div class="viewcode-block" id="multiply_row">
+<a class="viewcode-back" href="../src_modules.html#sparse_utils.multiply_row">[docs]</a>
+<span class="k">def</span> <span class="nf">multiply_row</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">row_idx</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">trunc</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Scale all stored values in a single row of a CSR matrix in place.</span>
+
+<span class="sd">    Only the explicitly stored (non-zero) entries in the row are affected.</span>
+<span class="sd">    Structural zeros are untouched.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        A (scipy.sparse.csr_matrix): The sparse matrix to modify in place.</span>
+<span class="sd">            Must be in CSR format.</span>
+<span class="sd">        row_idx (int): Zero-based index of the row to scale.</span>
+<span class="sd">        alpha (float): Scalar multiplier applied to every stored entry in the</span>
+<span class="sd">            specified row.</span>
+<span class="sd">        trunc (bool, optional): If ``True``, the scaled values are clipped to</span>
+<span class="sd">            the interval ``[0.0, 1.0]`` after multiplication. Defaults to</span>
+<span class="sd">            ``False``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">idx_start_row</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">row_idx</span><span class="p">]</span>
+    <span class="n">idx_end_row</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">row_idx</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">idx_start_row</span><span class="p">:</span><span class="n">idx_end_row</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">*</span>
+                                         <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">idx_start_row</span><span class="p">:</span><span class="n">idx_end_row</span><span class="p">]</span>
+                                         <span class="p">)</span>
+    <span class="k">if</span> <span class="n">trunc</span><span class="p">:</span>
+        <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">idx_start_row</span><span class="p">:</span><span class="n">idx_end_row</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+            <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">idx_start_row</span><span class="p">:</span><span class="n">idx_end_row</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="multiply_col">
+<a class="viewcode-back" href="../src_modules.html#sparse_utils.multiply_col">[docs]</a>
+<span class="k">def</span> <span class="nf">multiply_col</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">col_idx</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">trunc</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Scale all stored values in a single column of a CSR matrix in place.</span>
+
+<span class="sd">    Locates every explicitly stored entry in the given column and multiplies</span>
+<span class="sd">    it by ``alpha``. Works on CSR format by scanning the ``indices`` array.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        A (scipy.sparse.csr_matrix): The sparse matrix to modify in place.</span>
+<span class="sd">            Must be in CSR format.</span>
+<span class="sd">        col_idx (int): Zero-based index of the column to scale.</span>
+<span class="sd">        alpha (float): Scalar multiplier applied to every stored entry in the</span>
+<span class="sd">            specified column.</span>
+<span class="sd">        trunc (bool, optional): If ``True``, the scaled values are clipped to</span>
+<span class="sd">            the interval ``[0.0, 1.0]`` after multiplication. Defaults to</span>
+<span class="sd">            ``False``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">col_indices</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indices</span> <span class="o">==</span> <span class="n">col_idx</span>
+    <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">col_indices</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">col_indices</span><span class="p">])</span>
+    <span class="k">if</span> <span class="n">trunc</span><span class="p">:</span>
+        <span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">col_indices</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">col_indices</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="prop_of_row">
+<a class="viewcode-back" href="../src_modules.html#sparse_utils.prop_of_row">[docs]</a>
+<span class="k">def</span> <span class="nf">prop_of_row</span><span class="p">(</span><span class="n">A</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the product of stored values in each row of a CSR matrix.</span>
+
+<span class="sd">    For each row the function multiplies all explicitly stored (non-zero)</span>
+<span class="sd">    entries together. Rows with no stored entries retain a product of ``1.0``</span>
+<span class="sd">    (identity for multiplication), which corresponds to the convention that</span>
+<span class="sd">    missing entries represent the value 1.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        A (scipy.sparse.csr_matrix): Input sparse matrix in CSR format.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: A 1-D array of shape ``(A.shape[0],)`` where element</span>
+<span class="sd">        ``i`` is the product of all stored values in row ``i``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">)</span>
+    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+        <span class="n">s</span><span class="p">,</span> <span class="n">e</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">s</span><span class="p">:</span><span class="n">e</span><span class="p">])</span>
+        <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="k">if</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">):</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indptr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">s</span><span class="p">:])</span>
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="prop_of_column">
+<a class="viewcode-back" href="../src_modules.html#sparse_utils.prop_of_column">[docs]</a>
+<span class="k">def</span> <span class="nf">prop_of_column</span><span class="p">(</span><span class="n">A</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the product of stored values in each column of a CSR matrix.</span>
+
+<span class="sd">    For each unique column index present in the matrix the function multiplies</span>
+<span class="sd">    all explicitly stored entries in that column. Columns with no stored</span>
+<span class="sd">    entries retain a product of ``1.0``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        A (scipy.sparse.csr_matrix): Input sparse matrix in CSR format.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: A 1-D array of shape ``(A.shape[1],)`` where element</span>
+<span class="sd">        ``j`` is the product of all stored values in column ``j``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">col_indices</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indices</span>
+    <span class="c1">#    print(&quot;columns&quot;, np.unique(col_indices))</span>
+
+    <span class="c1"># print(&quot;.... prop_of_column fce &quot;, A.indices, np.unique(col_indices), A.data)</span>
+
+    <span class="k">for</span> <span class="n">col_idx</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">col_indices</span><span class="p">):</span>
+        <span class="n">current_indices</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">indices</span> <span class="o">==</span> <span class="n">col_idx</span>
+        <span class="c1">#        print(&quot; .... &quot;, A.data[current_indices], np.prod(1 - A.data[current_indices]))</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">col_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">current_indices</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="multiply_zeros_as_ones">
+<a class="viewcode-back" href="../src_modules.html#sparse_utils.multiply_zeros_as_ones">[docs]</a>
+<span class="k">def</span> <span class="nf">multiply_zeros_as_ones</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Element-wise multiply two sparse matrices treating structural zeros as ones.</span>
+
+<span class="sd">    Standard sparse element-wise multiplication treats structurally-zero</span>
+<span class="sd">    positions as ``0 * 0 = 0``. This function instead treats a missing entry</span>
+<span class="sd">    (structural zero) in *either* matrix as the value ``1.0``, so that:</span>
+
+<span class="sd">    - positions present in both ``a`` and ``b`` → ``a[i,j] * b[i,j]``</span>
+<span class="sd">    - positions present only in ``a``             → ``a[i,j]``  (b treated as 1)</span>
+<span class="sd">    - positions present only in ``b``             → ``b[i,j]``  (a treated as 1)</span>
+<span class="sd">    - positions absent in both                    → ``0``  (stored as structural zero)</span>
+
+<span class="sd">    This is useful for computing the joint probability of *no contact* across</span>
+<span class="sd">    multiple probability layers, where an absent entry means &quot;no edge, hence</span>
+<span class="sd">    probability 1 of no contact on this layer&quot;.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        a (scipy.sparse.csr_matrix): First sparse matrix.</span>
+<span class="sd">        b (scipy.sparse.csr_matrix): Second sparse matrix. Must have the same</span>
+<span class="sd">            shape as ``a``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        scipy.sparse.csr_matrix: Result matrix with the same shape as ``a``</span>
+<span class="sd">        and ``b``, where element-wise multiplication respects the</span>
+<span class="sd">        zeros-as-ones convention described above.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+    <span class="n">r</span><span class="p">,</span> <span class="n">c</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()</span>
+
+    <span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">r</span><span class="p">))</span>
+    <span class="n">ones</span> <span class="o">=</span> <span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">((</span><span class="n">data</span><span class="p">,</span> <span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">c</span><span class="p">)),</span> <span class="n">shape</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="c1"># get common elements</span>
+    <span class="n">ones_a</span> <span class="o">=</span> <span class="n">ones</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+    <span class="n">ones_b</span> <span class="o">=</span> <span class="n">ones</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+    <span class="n">a_dif</span> <span class="o">=</span> <span class="n">a</span> <span class="o">-</span> <span class="n">ones_a</span>
+    <span class="n">b_dif</span> <span class="o">=</span> <span class="n">b</span> <span class="o">-</span> <span class="n">ones_b</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">ones_a</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">ones_b</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result</span> <span class="o">+</span> <span class="n">a_dif</span> <span class="o">+</span> <span class="n">b_dif</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+
+    <span class="n">a</span> <span class="o">=</span> <span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+
+    <span class="n">a</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+    <span class="n">a</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+
+    <span class="n">b</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>
+    <span class="n">b</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>
+
+    <span class="n">c</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+    <span class="n">c</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+
+    <span class="n">N</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span>  <span class="c1"># empty values = 1.0</span>
+
+    <span class="k">for</span> <span class="n">prob</span> <span class="ow">in</span> <span class="p">[</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">]:</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">prob</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">not_a</span> <span class="o">=</span> <span class="n">A</span>  <span class="c1"># empty values = 1.0</span>
+        <span class="n">not_a</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">not_a</span><span class="o">.</span><span class="n">data</span>
+        <span class="c1"># print(prob_no_contact.todense())</span>
+        <span class="c1"># print(not_a.todense())</span>
+        <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">multiply_zeros_as_ones</span><span class="p">(</span><span class="n">prob_no_contact</span><span class="p">,</span> <span class="n">not_a</span><span class="p">)</span>
+        <span class="c1"># print(prob_no_contact.todense())</span>
+        <span class="c1"># print()</span>
+
+    <span class="c1"># probability of contact (whatever layer)</span>
+    <span class="n">prob_of_contact</span> <span class="o">=</span> <span class="n">prob_no_contact</span>
+    <span class="n">prob_of_contact</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">prob_no_contact</span><span class="o">.</span><span class="n">data</span>
+<span class="c1">#    print(prob_of_contact.todense())</span>
+
+    <span class="n">a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+
+    <span class="n">a</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+    <span class="n">a</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+
+    <span class="n">b</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>
+    <span class="n">b</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>
+
+    <span class="n">c</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+    <span class="n">c</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.2</span>
+
+<span class="c1">#    print()</span>
+<span class="c1">#    print()</span>
+
+    <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span>
+
+    <span class="k">for</span> <span class="n">prob</span> <span class="ow">in</span> <span class="p">[</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">]:</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">prob</span>
+        <span class="n">not_a</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">A</span>
+        <span class="c1"># print(prob_no_contact)</span>
+        <span class="c1"># print(not_a)</span>
+        <span class="n">prob_no_contact</span> <span class="o">=</span> <span class="n">prob_no_contact</span> <span class="o">*</span> <span class="n">not_a</span>
+        <span class="c1"># print(prob_no_contact)</span>
+        <span class="c1"># print()</span>
+
+    <span class="c1"># probability of contact (whatever layer)</span>
+    <span class="n">prob_of_contact</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">prob_no_contact</span>
+<span class="c1">#    print(prob_of_contact)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

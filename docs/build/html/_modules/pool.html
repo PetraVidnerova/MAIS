@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pool &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>pool</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for pool</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Multiprocessing worker pool for parallel model evaluation in the MAIS simulation.</span>
+
+<span class="sd">This module provides a simple process-pool abstraction built on top of</span>
+<span class="sd">:mod:`multiprocessing`. Each worker process runs an evaluation function in an</span>
+<span class="sd">infinite loop, consuming queries from a shared input queue and posting results</span>
+<span class="sd">to a shared output queue. The main process enqueues tasks and dequeues results</span>
+<span class="sd">through the :class:`Pool` interface.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="kn">import</span> <span class="n">Process</span><span class="p">,</span> <span class="n">Queue</span>
+
+
+<div class="viewcode-block" id="worker">
+<a class="viewcode-back" href="../src_modules.html#pool.worker">[docs]</a>
+<span class="k">def</span> <span class="nf">worker</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">evalfunc</span><span class="p">,</span> <span class="n">querries</span><span class="p">,</span> <span class="n">answers</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Entry point for a pool worker process.</span>
+
+<span class="sd">    Runs an infinite loop: retrieves one query at a time from the ``querries``</span>
+<span class="sd">    queue, evaluates ``evalfunc(model, query)``, and places the result onto</span>
+<span class="sd">    the ``answers`` queue. The loop continues until the process is terminated</span>
+<span class="sd">    externally (e.g., via :meth:`Pool.close`).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        name (int): Numeric identifier for this worker (used for logging or</span>
+<span class="sd">            debugging).</span>
+<span class="sd">        evalfunc (callable): Function to evaluate. Called as</span>
+<span class="sd">            ``evalfunc(model, query)`` and must return a serialisable result.</span>
+<span class="sd">        querries (multiprocessing.Queue): Input queue from which queries are</span>
+<span class="sd">            consumed.</span>
+<span class="sd">        answers (multiprocessing.Queue): Output queue to which computed</span>
+<span class="sd">            answers are posted.</span>
+<span class="sd">        model: Model object passed as the first argument to ``evalfunc``.</span>
+<span class="sd">            Each worker receives its own model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">querry</span> <span class="o">=</span> <span class="n">querries</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+        <span class="n">answer</span> <span class="o">=</span> <span class="n">evalfunc</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">querry</span><span class="p">)</span>
+        <span class="n">answers</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">answer</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Pool">
+<a class="viewcode-back" href="../src_modules.html#pool.Pool">[docs]</a>
+<span class="k">class</span> <span class="nc">Pool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Process pool that parallelises model evaluation across multiple workers.</span>
+
+<span class="sd">    Workers consume tasks from a shared queries queue and post results to a</span>
+<span class="sd">    shared answers queue. The pool is non-blocking from the caller&#39;s</span>
+<span class="sd">    perspective: tasks are submitted via :meth:`putQuerry` and results are</span>
+<span class="sd">    retrieved (blocking) via :meth:`getAnswer`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        processors (int): Number of worker processes to spawn.</span>
+<span class="sd">        evalfunc (callable): Evaluation function passed to each worker.</span>
+<span class="sd">            Signature: ``evalfunc(model, query) -&gt; answer``.</span>
+<span class="sd">        models (list): List of model instances, one per worker. Element ``i``</span>
+<span class="sd">            is passed to worker ``i``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">processors</span><span class="p">,</span> <span class="n">evalfunc</span><span class="p">,</span> <span class="n">models</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">querries</span> <span class="o">=</span> <span class="n">Queue</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">answers</span> <span class="o">=</span> <span class="n">Queue</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">workers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">processors</span><span class="p">):</span>
+             <span class="n">worker_i</span> <span class="o">=</span> <span class="n">Process</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="n">worker</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">evalfunc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">querries</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">answers</span><span class="p">,</span> <span class="n">models</span><span class="p">[</span><span class="n">i</span><span class="p">]))</span>
+             <span class="bp">self</span><span class="o">.</span><span class="n">workers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">worker_i</span><span class="p">)</span>
+             <span class="n">worker_i</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>        <span class="c1"># Launch worker() as a separate python process</span>
+
+<div class="viewcode-block" id="Pool.putQuerry">
+<a class="viewcode-back" href="../src_modules.html#pool.Pool.putQuerry">[docs]</a>
+    <span class="k">def</span> <span class="nf">putQuerry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">querry</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Enqueue a query for processing by one of the worker processes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            querry: The query object to evaluate. Must be picklable.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">querries</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">querry</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Pool.getAnswer">
+<a class="viewcode-back" href="../src_modules.html#pool.Pool.getAnswer">[docs]</a>
+    <span class="k">def</span> <span class="nf">getAnswer</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Block until an answer is available and return it.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            The result produced by ``evalfunc`` for the oldest unread query.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">answers</span><span class="o">.</span><span class="n">get</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="Pool.close">
+<a class="viewcode-back" href="../src_modules.html#pool.Pool.close">[docs]</a>
+    <span class="k">def</span> <span class="nf">close</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Terminate all worker processes and shut down the pool.</span>
+
+<span class="sd">        Sends a ``SIGTERM`` signal to each worker process. After calling this</span>
+<span class="sd">        method the pool should not be used further.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers</span><span class="p">:</span>
+            <span class="n">w</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span></div>
+</div>
+
+        <span class="c1">#print(&quot;pool killed&quot;)</span>
+        
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

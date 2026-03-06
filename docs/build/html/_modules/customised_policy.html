@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>customised_policy &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>customised_policy</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for customised_policy</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Highly configurable custom policy for the MAIS epidemic simulation.</span>
+
+<span class="sd">This module provides :class:`CustomPolicy`, the primary policy used in</span>
+<span class="sd">production simulations.  It orchestrates:</span>
+
+<span class="sd">* Layer-weight changes read from a scenario calendar file.</span>
+<span class="sd">* Model parameter changes (beta, theta, test rate).</span>
+<span class="sd">* Face-mask effectiveness updates.</span>
+<span class="sd">* Superspreader event toggling.</span>
+<span class="sd">* Forced infections on a specified day.</span>
+<span class="sd">* Daily background import of exposed individuals.</span>
+<span class="sd">* Dynamic start/stop of sub-policies loaded by name.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span><span class="p">,</span> <span class="n">reduce</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">utils.policy_utils</span> <span class="kn">import</span> <span class="n">load_scenario_dict</span>
+
+
+<span class="k">def</span> <span class="nf">_load_dictionary</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a time-indexed dictionary from a JSON or CSV file.</span>
+
+<span class="sd">    JSON files are expected to be objects with string keys (simulation</span>
+<span class="sd">    day numbers) and arbitrary values.  CSV files must have a ``T``</span>
+<span class="sd">    column and a second column whose values are used.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filename (str or None): Path to the file, or ``None``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict or None: Mapping from ``int`` day to the corresponding</span>
+<span class="sd">        value, or ``None`` if ``filename`` is ``None``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">filename</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">filename</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.json&quot;</span><span class="p">):</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">{</span>
+                <span class="nb">int</span><span class="p">(</span><span class="n">key</span><span class="p">):</span> <span class="n">value</span>
+                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">],</span> <span class="n">df</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]))</span>
+
+
+<div class="viewcode-block" id="CustomPolicy">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">CustomPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Highly configurable orchestration policy for MAIS simulations.</span>
+
+<span class="sd">    Controls layer weights, model parameters (beta, theta, test rate),</span>
+<span class="sd">    face-mask effectiveness, superspreader events, forced infections,</span>
+<span class="sd">    background import of exposed individuals, and the lifecycle of</span>
+<span class="sd">    dynamically loaded sub-policies.</span>
+
+<span class="sd">    All time-indexed inputs are read from external files (JSON or CSV)</span>
+<span class="sd">    keyed on integer simulation-day numbers.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        layer_changes_filename (str, optional): Path to a scenario</span>
+<span class="sd">            calendar file for layer-weight updates.</span>
+<span class="sd">        param_changes_filename (str, optional): Temporarily disabled.</span>
+<span class="sd">            Path to a JSON file of model-parameter changes.</span>
+<span class="sd">        policy_calendar_filename (str, optional): Path to a JSON file</span>
+<span class="sd">            mapping simulation days to ``[action, policy_string]``</span>
+<span class="sd">            pairs for starting/stopping sub-policies.</span>
+<span class="sd">        beta_factor_filename (str, optional): Path to a</span>
+<span class="sd">            JSON/CSV file with per-day beta-factor multipliers.</span>
+<span class="sd">        face_masks_filename (str, optional): Path to a JSON/CSV file</span>
+<span class="sd">            with per-day face-mask compliance values.</span>
+<span class="sd">        theta_filename (str, optional): Path to a JSON/CSV file with</span>
+<span class="sd">            per-day ``theta_Is`` multipliers.</span>
+<span class="sd">        test_rate_filename (str, optional): Path to a JSON/CSV file</span>
+<span class="sd">            with per-day test-rate multipliers.</span>
+<span class="sd">        superspreader_date (int or str, optional): Simulation day on</span>
+<span class="sd">            which the superspreader layer is activated (one day only).</span>
+<span class="sd">        superspreader_layer (int or str, optional): Index of the</span>
+<span class="sd">            superspreader layer (default 31).</span>
+<span class="sd">        force_infect (int or str, optional): Simulation day on which</span>
+<span class="sd">            one node on ``force_infect_layer`` is forcibly infected.</span>
+<span class="sd">        force_infect_layer (int or str, optional): Layer index used to</span>
+<span class="sd">            select the node for forced infection.</span>
+<span class="sd">        init_filename (str, optional): Path to a JSON file mapping days</span>
+<span class="sd">            to the number of nodes moved to state E on that day.</span>
+<span class="sd">        reduction_coef1 (float or str): Required.  Primary beta</span>
+<span class="sd">            reduction coefficient (face-mask effect on non-family</span>
+<span class="sd">            contacts).</span>
+<span class="sd">        reduction_coef2 (float or str): Required.  Secondary beta</span>
+<span class="sd">            reduction coefficient (face-mask spillover into family).</span>
+<span class="sd">        new_beta (str, optional): ``&quot;Yes&quot;`` to use the updated beta</span>
+<span class="sd">            calculation combining face-mask compliance and beta factors.</span>
+<span class="sd">        daily_import (float or str, optional): Daily probability of</span>
+<span class="sd">            importing one exposed individual (value in [0, 1]).</span>
+<span class="sd">        **kwargs: Sub-policy keyword arguments.  Pass</span>
+<span class="sd">            ``sub_policies`` (list of names) together with</span>
+<span class="sd">            ``&lt;name&gt;_filename``, ``&lt;name&gt;_name``, and optionally</span>
+<span class="sd">            ``&lt;name&gt;_config`` for each sub-policy.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If ``param_changes_filename`` is provided (temporarily</span>
+<span class="sd">            disabled), if an unknown action is found in the policy</span>
+<span class="sd">            calendar, if ``new_beta=Yes`` but the required calendars are</span>
+<span class="sd">            absent or mismatched, or if ``reduction_coef1``/</span>
+<span class="sd">            ``reduction_coef2`` are missing.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="CustomPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">graph</span><span class="p">,</span>
+                 <span class="n">model</span><span class="p">,</span>
+                 <span class="n">layer_changes_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">param_changes_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">policy_calendar_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">beta_factor_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">face_masks_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">theta_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">test_rate_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">superspreader_date</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">superspreader_layer</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">force_infect</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">force_infect_layer</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">init_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">reduction_coef1</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">reduction_coef2</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">new_beta</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">daily_import</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the custom policy from file-based calendars and keyword arguments.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            layer_changes_filename (str, optional): Layer-weight</span>
+<span class="sd">                scenario calendar file.</span>
+<span class="sd">            param_changes_filename (str, optional): Temporarily</span>
+<span class="sd">                disabled model-parameter changes file.</span>
+<span class="sd">            policy_calendar_filename (str, optional): Sub-policy</span>
+<span class="sd">                lifecycle calendar file.</span>
+<span class="sd">            beta_factor_filename (str, optional): Beta-factor calendar</span>
+<span class="sd">                file.</span>
+<span class="sd">            face_masks_filename (str, optional): Face-mask compliance</span>
+<span class="sd">                calendar file.</span>
+<span class="sd">            theta_filename (str, optional): ``theta_Is`` multiplier</span>
+<span class="sd">                calendar file.</span>
+<span class="sd">            test_rate_filename (str, optional): Test-rate multiplier</span>
+<span class="sd">                calendar file.</span>
+<span class="sd">            superspreader_date (int or str, optional): Day to activate</span>
+<span class="sd">                superspreader layer.</span>
+<span class="sd">            superspreader_layer (int or str, optional): Superspreader</span>
+<span class="sd">                layer index.</span>
+<span class="sd">            force_infect (int or str, optional): Day for forced</span>
+<span class="sd">                infection.</span>
+<span class="sd">            force_infect_layer (int or str, optional): Layer for</span>
+<span class="sd">                selecting the force-infected node.</span>
+<span class="sd">            init_filename (str, optional): Initial exposure calendar</span>
+<span class="sd">                file.</span>
+<span class="sd">            reduction_coef1 (float or str): Primary beta reduction</span>
+<span class="sd">                coefficient (required).</span>
+<span class="sd">            reduction_coef2 (float or str): Secondary beta reduction</span>
+<span class="sd">                coefficient (required).</span>
+<span class="sd">            new_beta (str, optional): ``&quot;Yes&quot;`` to use new beta</span>
+<span class="sd">                calculation.</span>
+<span class="sd">            daily_import (float or str, optional): Daily import</span>
+<span class="sd">                probability.</span>
+<span class="sd">            **kwargs: Sub-policy configuration keyword arguments.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">layer_changes_filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">layer_changes_calendar</span> <span class="o">=</span> <span class="n">load_scenario_dict</span><span class="p">(</span>
+                <span class="n">layer_changes_filename</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">layer_changes_calendar</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">policy_calendar_filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">policy_calendar_filename</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">policy_calendar</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="nb">int</span><span class="p">(</span><span class="n">k</span><span class="p">):</span> <span class="n">v</span>
+                    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="p">}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">policy_calendar</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">param_changes_filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Temporarily disabled. Sry.&quot;</span><span class="p">)</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">param_changes_filename</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">param_changes_calendar</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">param_changes_calendar</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span> <span class="o">=</span> <span class="n">_load_dictionary</span><span class="p">(</span><span class="n">face_masks_filename</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;DBG: NO MASKS &quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">beta_factor_calendar</span> <span class="o">=</span> <span class="n">_load_dictionary</span><span class="p">(</span><span class="n">beta_factor_filename</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">theta_calendar</span> <span class="o">=</span> <span class="n">_load_dictionary</span><span class="p">(</span><span class="n">theta_filename</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">theta_calendar</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;DBG: Theta calendar&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_rate_calendar</span> <span class="o">=</span> <span class="n">_load_dictionary</span><span class="p">(</span><span class="n">test_rate_filename</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">policies</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">if</span> <span class="n">superspreader_date</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_date</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">superspreader_date</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_date</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">superspreader_layer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">superspreader_layer</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span> <span class="o">=</span> <span class="mi">31</span>
+
+        <span class="k">if</span> <span class="n">force_infect</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">force_infect</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">force_infect</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">force_infect</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">force_infect</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">force_infect_layer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">force_infect_layer</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">force_infect_layer</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">force_infect_layer</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">init_filename</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">init_filename</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">init_calendar</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="nb">int</span><span class="p">(</span><span class="n">k</span><span class="p">):</span> <span class="n">v</span>
+                    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="p">}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">init_calendar</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">reduction_coef1</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef1</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">reduction_coef1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef1</span> <span class="o">=</span> <span class="mf">0.9</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Missing coef1&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">reduction_coef2</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef2</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">reduction_coef2</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef2</span> <span class="o">=</span> <span class="mf">0.2</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Missing coef2&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span> <span class="o">=</span> <span class="mf">1.0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">new_beta</span> <span class="o">=</span> <span class="kc">False</span> <span class="k">if</span> <span class="n">new_beta</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">new_beta</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">new_beta</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Using new beta&quot;</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">beta_factor_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">beta_factor_calendar</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes_infected</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">daily_import</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">daily_import</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">daily_import</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">daily_import</span> <span class="o">=</span> <span class="n">daily_import</span>
+
+        <span class="k">if</span> <span class="s2">&quot;sub_policies&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;sub_policies&quot;</span><span class="p">])</span> <span class="ow">is</span> <span class="nb">list</span><span class="p">:</span>
+                <span class="n">subpolicies</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;sub_policies&quot;</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">subpolicies</span> <span class="o">=</span> <span class="p">[</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;sub_policies&quot;</span><span class="p">]]</span>
+            <span class="k">for</span> <span class="n">sub_policy_name</span> <span class="ow">in</span> <span class="n">subpolicies</span><span class="p">:</span>
+                <span class="n">filename</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sub_policy_name</span><span class="si">}</span><span class="s2">_filename&quot;</span><span class="p">]</span>
+                <span class="n">class_name</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sub_policy_name</span><span class="si">}</span><span class="s2">_name&quot;</span><span class="p">]</span>
+                <span class="n">config</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sub_policy_name</span><span class="si">}</span><span class="s2">_config&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+                <span class="n">policy</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">class_name</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">config</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">class_name</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">config</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="p">[</span><span class="n">policy</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">create_policy</span><span class="p">(</span>
+                    <span class="n">filename</span><span class="p">,</span> <span class="n">class_name</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.create_policy">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.create_policy">[docs]</a>
+    <span class="k">def</span> <span class="nf">create_policy</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">,</span> <span class="n">object_name</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Dynamically import and instantiate a policy class by module and name.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Module name within the ``policies`` package</span>
+<span class="sd">                (e.g. ``&quot;contact_tracing&quot;``).</span>
+<span class="sd">            object_name (str): Class name within that module.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file</span>
+<span class="sd">                to pass to the policy constructor.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Policy: An instantiated policy object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">PolicyClass</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span>
+            <span class="nb">__import__</span><span class="p">(</span>
+                <span class="s2">&quot;policies.&quot;</span><span class="o">+</span><span class="n">filename</span><span class="p">,</span>
+                <span class="nb">globals</span><span class="p">(),</span> <span class="nb">locals</span><span class="p">(),</span>
+                <span class="p">[</span><span class="n">object_name</span><span class="p">],</span>
+                <span class="mi">0</span>
+            <span class="p">),</span>
+            <span class="n">object_name</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">config_file</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">PolicyClass</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="n">config_file</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">PolicyClass</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.update_layers">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_layers">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coefs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update graph layer weights to the provided coefficient values.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            coefs: Iterable of new layer-weight values passed directly</span>
+<span class="sd">                to ``graph.set_layer_weights``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">set_layer_weights</span><span class="p">(</span><span class="n">coefs</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.switch_on_superspread">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.switch_on_superspread">[docs]</a>
+    <span class="k">def</span> <span class="nf">switch_on_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Activate the superspreader layer by setting its weight to 1.0.&quot;&quot;&quot;</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;DBG Superspreader ON&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.switch_off_superspread">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.switch_off_superspread">[docs]</a>
+    <span class="k">def</span> <span class="nf">switch_off_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Deactivate the superspreader layer by setting its weight to 0.0.&quot;&quot;&quot;</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;DBG Superspreader OFF&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.update_beta">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_beta">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_beta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update model beta values based on face-mask compliance (legacy method).</span>
+
+<span class="sd">        Scales non-family beta by ``(1 - reduction_coef1 * masks)`` and</span>
+<span class="sd">        family beta by a secondary factor derived from the non-family</span>
+<span class="sd">        reduction.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            masks (float): Current face-mask compliance level in [0, 1].</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">orig_beta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span>
+        <span class="n">orig_beta_A</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta_A&quot;</span><span class="p">]</span>
+
+        <span class="n">reduction</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef1</span> <span class="o">*</span> <span class="n">masks</span><span class="p">)</span>
+
+        <span class="n">new_value</span> <span class="o">=</span> <span class="n">orig_beta</span> <span class="o">*</span> <span class="n">reduction</span>
+        <span class="n">new_value_A</span> <span class="o">=</span> <span class="n">orig_beta_A</span> <span class="o">*</span> <span class="n">reduction</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="si">}</span><span class="s2"> DBG BETA </span><span class="si">{</span><span class="n">new_value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value_A</span><span class="p">)</span>
+
+        <span class="n">orig_beta_in_family</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta_in_family&quot;</span><span class="p">]</span>
+        <span class="n">orig_beta_A_in_family</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta_A_in_family&quot;</span><span class="p">]</span>
+
+        <span class="n">reduction</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef2</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">reduction</span><span class="p">)</span>
+
+        <span class="n">new_value</span> <span class="o">=</span> <span class="n">orig_beta_in_family</span> <span class="o">*</span> <span class="n">reduction</span>
+        <span class="n">new_value_A</span> <span class="o">=</span> <span class="n">orig_beta_A_in_family</span> <span class="o">*</span> <span class="n">reduction</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value_A</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG beta: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.update_beta2">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_beta2">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_beta2</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">,</span> <span class="n">beta_factors</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update model beta values using both face-mask compliance and beta factors.</span>
+
+<span class="sd">        Family beta is reduced by ``(1 - reduction_coef1 * beta_factors)``.</span>
+<span class="sd">        Non-family beta is then derived as</span>
+<span class="sd">        ``(1 - reduction_coef2 * masks) * family_beta``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            masks (float): Current face-mask compliance in [0, 1].</span>
+<span class="sd">            beta_factors (float): Additional beta scaling factor.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            AssertionError: If ``beta_factors`` is ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="n">beta_factors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+
+        <span class="n">orig_beta_in_family</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta_in_family&quot;</span><span class="p">]</span>
+        <span class="n">orig_beta_A_in_family</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;beta_A_in_family&quot;</span><span class="p">]</span>
+
+        <span class="n">reduction</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef1</span><span class="o">*</span><span class="n">beta_factors</span><span class="p">)</span>
+
+        <span class="n">new_value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span> <span class="o">*</span> <span class="n">orig_beta_in_family</span> <span class="o">*</span> <span class="n">reduction</span>
+        <span class="n">new_value_A</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span> <span class="o">*</span> <span class="n">orig_beta_A_in_family</span> <span class="o">*</span> <span class="n">reduction</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value_A</span><span class="p">)</span>
+
+        <span class="c1">#orig_beta= self.model.init_kwargs[&quot;beta&quot;]</span>
+        <span class="c1">#orig_beta_A = self.model.init_kwargs[&quot;beta_A&quot;]</span>
+
+        <span class="c1"># assumes betas are uniform</span>
+        <span class="n">new_beta</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef2</span><span class="o">*</span><span class="n">masks</span><span class="p">)</span> <span class="o">*</span> \
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">new_beta_A</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">reduction_coef2</span><span class="o">*</span><span class="n">masks</span><span class="p">)</span> <span class="o">*</span> \
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="si">}</span><span class="s2"> DBG BETA </span><span class="si">{</span><span class="n">new_value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_beta</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_beta_A</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG beta: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.beta_increase">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.beta_increase">[docs]</a>
+    <span class="k">def</span> <span class="nf">beta_increase</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Increase all beta values by a factor of 1.5 (mutation simulation).</span>
+
+<span class="sd">        Sets ``mutation_coef`` to 1.5 and scales ``beta``, ``beta_A``,</span>
+<span class="sd">        ``beta_A_in_family``, and ``beta_in_family`` accordingly.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span> <span class="o">=</span> <span class="mf">1.5</span>
+
+        <span class="n">orig_value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span><span class="o">*</span><span class="n">orig_value</span><span class="p">)</span>
+
+        <span class="n">orig_value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span><span class="o">*</span><span class="n">orig_value</span><span class="p">)</span>
+
+        <span class="n">orig_value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_A_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span><span class="o">*</span><span class="n">orig_value</span><span class="p">)</span>
+
+        <span class="n">orig_value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mutation_coef</span><span class="o">*</span><span class="n">orig_value</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.update_test_rate">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_test_rate">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_test_rate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Scale the testing rate (theta_Is) by a given coefficient.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            coef (float): Multiplier applied to the original test rate</span>
+<span class="sd">                from ``model.init_kwargs``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">orig_test_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;test_rate&quot;</span><span class="p">]</span>
+        <span class="n">new_value</span> <span class="o">=</span> <span class="n">coef</span> <span class="o">*</span> <span class="n">orig_test_rate</span>
+        <span class="c1">#self.model.test_rate = new_value</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.update_theta">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_theta">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Scale the symptomatic testing probability (theta_Is) by a coefficient.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            coef (float): Multiplier applied to the original</span>
+<span class="sd">                ``theta_Is`` value from ``model.init_kwargs``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">orig_theta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">init_kwargs</span><span class="p">[</span><span class="s2">&quot;theta_Is&quot;</span><span class="p">]</span>
+        <span class="n">new_value</span> <span class="o">=</span> <span class="n">orig_theta</span> <span class="o">*</span> <span class="n">coef</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span>
+        <span class="c1"># if isinstance(new_value, (list)):</span>
+        <span class="c1">#     np_new_value = np.array(new_value).reshape(</span>
+        <span class="c1">#         (self.model.num_nodes, 1))</span>
+        <span class="c1"># else:</span>
+        <span class="c1">#     np_new_value = np.full(</span>
+        <span class="c1">#         fill_value=new_value, shape=(self.model.num_nodes, 1))</span>
+        <span class="c1"># setattr(self.model, &quot;theta_Is&quot;, np_new_value)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG theta: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.run">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the custom policy.</span>
+
+<span class="sd">        Processes all registered calendars in order:</span>
+<span class="sd">        initial exposures, daily import, policy-calendar events,</span>
+<span class="sd">        parameter changes, layer updates, forced infections,</span>
+<span class="sd">        superspreader toggling, face-mask updates, theta updates,</span>
+<span class="sd">        test-rate updates, and finally runs all active sub-policies.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="kc">False</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># dbg check</span>
+            <span class="n">all_deposited</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+                <span class="n">all_deposited</span> <span class="o">=</span> <span class="n">all_deposited</span> <span class="o">+</span> <span class="n">p</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">depo</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">EvaQuarantinePolicy</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">ContactTracingPolicy</span><span class="p">):</span>
+                    <span class="n">all_deposited</span> <span class="o">+=</span> <span class="n">p</span><span class="o">.</span><span class="n">waiting_room_second_test</span><span class="o">.</span><span class="n">depo</span>
+            <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">all_deposited</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">),</span>  <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">all_deposited</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> </span><span class="se">\n</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+
+            <span class="c1"># print(all_deposited.nonzero()[0],</span>
+            <span class="c1">#     self.graph.is_quarantined.nonzero()[0])</span>
+            <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span>
+                <span class="n">all_deposited</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]),</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">all_deposited</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> </span><span class="se">\n</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">is_quarantined</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CustomPolicy </span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">today</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_calendar</span><span class="p">:</span>
+            <span class="n">num</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">move_to_E</span><span class="p">(</span><span class="n">num</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">daily_import</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">daily_import</span> <span class="o">&lt;=</span> <span class="mf">1.0</span><span class="p">,</span> <span class="s2">&quot;not implemented yet&quot;</span>
+            <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">daily_import</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">move_to_E</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_calendar</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;changing quarantine policy&quot;</span><span class="p">)</span>
+            <span class="c1"># change the quaratine policy function</span>
+            <span class="k">for</span> <span class="n">action</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;start&quot;</span><span class="p">:</span>
+                    <span class="n">vals</span> <span class="o">=</span> <span class="n">policy</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)</span>
+                    <span class="n">filename</span><span class="p">,</span> <span class="n">object_name</span> <span class="o">=</span> <span class="n">vals</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">vals</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+                    <span class="n">config_file</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">vals</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="k">else</span> <span class="n">vals</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+                    <span class="n">PolicyClass</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="nb">__import__</span><span class="p">(</span><span class="n">filename</span><span class="p">),</span> <span class="n">object_name</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">config_file</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="p">[</span><span class="n">policy</span><span class="p">]</span> <span class="o">=</span> <span class="n">PolicyClass</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="p">[</span><span class="n">policy</span><span class="p">]</span> <span class="o">=</span> <span class="n">PolicyClass</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="n">config_file</span><span class="p">)</span>
+                    <span class="c1">#params = [ float(param) for param in vals[2:] ]</span>
+                    <span class="c1">#self.policies[policy] = PolicyClass(self.graph, self.model, *params)</span>
+                <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;stop&quot;</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="p">[</span><span class="n">policy</span><span class="p">]</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown action </span><span class="si">{</span><span class="n">action</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_changes_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_changes_calendar</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">action</span><span class="p">,</span> <span class="n">param</span><span class="p">,</span> <span class="n">new_value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_changes_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;set&quot;</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">new_value</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">)):</span>
+                        <span class="n">np_new_value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">np_new_value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+                            <span class="n">fill_value</span><span class="o">=</span><span class="n">new_value</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+                    <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">param</span><span class="p">,</span> <span class="n">np_new_value</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;*&quot;</span><span class="p">:</span>
+                    <span class="n">attr</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">param</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">new_value</span><span class="p">)</span> <span class="o">==</span> <span class="nb">str</span><span class="p">:</span>
+                        <span class="n">new_value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">new_value</span><span class="p">)</span>
+                    <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">param</span><span class="p">,</span> <span class="n">attr</span> <span class="o">*</span> <span class="n">new_value</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unknown value&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_changes_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_changes_calendar</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">today</span><span class="si">}</span><span class="s2"> updating layers&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_layers</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_changes_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">force_infect</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">force_infect</span><span class="p">:</span>
+            <span class="c1"># number_to_infect = 5 if self.force_infect_layer in (33,34,35) else 10</span>
+            <span class="n">number_to_infect</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="n">nodes_on_layer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_nodes</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">force_infect_layer</span><span class="p">)</span>
+            <span class="n">nodes_to_infect</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span>
+                <span class="n">nodes_on_layer</span><span class="p">,</span> <span class="n">number_to_infect</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">force_infect</span><span class="p">(</span><span class="n">nodes_to_infect</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes_infected</span> <span class="o">=</span> <span class="n">nodes_to_infect</span>
+ <span class="c1">#           self.model.test_rate[self.nodes_infected] = 1.0</span>
+ <span class="c1">#           self.model.theta_Is[self.nodes_infected] =  0.0</span>
+ <span class="c1">#           self.model.testable[self.nodes_infected] = True</span>
+
+<span class="c1">#        if self.nodes_infected is not None:</span>
+<span class="c1">#            if self.model.t == self.force_infect + 6:</span>
+<span class="c1">#                self.model.theta_Is[self.nodes_infected] =  1.0</span>
+<span class="c1">#                self.nodes_infected = None</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_date</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_date</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">switch_on_superspread</span><span class="p">()</span>
+            <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">superspreader_date</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">switch_off_superspread</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG face masks update&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">new_beta</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">update_beta2</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">face_masks_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">beta_factor_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Temporarily disabled.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># if today == 335:</span>
+        <span class="c1">#     self.beta_increase()</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">theta_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">theta_calendar</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG theta update&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_theta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">theta_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_rate_calendar</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">today</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_rate_calendar</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG test rate update&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_test_rate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_rate_calendar</span><span class="p">[</span><span class="n">today</span><span class="p">])</span>
+
+        <span class="c1"># perform registred policies</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;run policy </span><span class="si">{</span><span class="w"> </span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">policy</span><span class="o">.</span><span class="n">run</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="CustomPolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Merge and return DataFrames from all active sub-policies.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame or None: Outer-merged DataFrame indexed by</span>
+<span class="sd">            ``T`` combining statistics from all sub-policies, or</span>
+<span class="sd">            ``None`` if there are no sub-policies or none produce data.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+        <span class="n">dfs</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">p</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="p">]</span>
+        <span class="n">dfs</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">dfs</span> <span class="k">if</span> <span class="n">d</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">dfs</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="n">my_merge</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">merge</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">reduce</span><span class="p">(</span><span class="n">my_merge</span><span class="p">,</span> <span class="n">dfs</span><span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

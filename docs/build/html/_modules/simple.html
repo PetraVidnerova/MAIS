@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>simple &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>simple</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for simple</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Minimal directed graph for information-spread models.</span>
+
+<span class="sd">This module provides :class:`SimpleGraph`, a lightweight directed graph</span>
+<span class="sd">representation designed for information models (e.g. opinion dynamics,</span>
+<span class="sd">rumour spreading) where edges are oriented and all transmission probabilities</span>
+<span class="sd">are uniform.  The graph is stored as two NumPy arrays—one for edge sources</span>
+<span class="sd">and one for edge destinations—keeping memory overhead minimal.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">copy</span> <span class="kn">import</span> <span class="n">copy</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">tqdm</span>
+<span class="kn">from</span> <span class="nn">scipy.sparse</span> <span class="kn">import</span> <span class="n">csr_matrix</span><span class="p">,</span> <span class="n">lil_matrix</span>
+
+
+<div class="viewcode-block" id="SimpleGraph">
+<a class="viewcode-back" href="../src_modules.html#simple.SimpleGraph">[docs]</a>
+<span class="k">class</span> <span class="nc">SimpleGraph</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lightweight directed graph for information models.</span>
+
+<span class="sd">    The graph stores only directed edges (no layer information, no</span>
+<span class="sd">    per-edge probabilities) as two NumPy arrays of source and destination</span>
+<span class="sd">    node indices.  This is sufficient for simple information/opinion models</span>
+<span class="sd">    where all contacts are equally likely to transmit.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        random_seed (int or None): Seed supplied at construction, stored for</span>
+<span class="sd">            reproducibility bookkeeping.</span>
+<span class="sd">        e_source (numpy.ndarray): Source node index for each edge.</span>
+<span class="sd">        e_dest (numpy.ndarray): Destination node index for each edge.</span>
+<span class="sd">        num_nodes (int): Total number of nodes inferred from the maximum</span>
+<span class="sd">            node index seen in the edge list.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        random_seed (int, optional): Seed for NumPy&#39;s random number</span>
+<span class="sd">            generator.  ``None`` leaves the global RNG state unchanged.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">random_seed</span><span class="p">:</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span> <span class="o">=</span> <span class="n">random_seed</span>
+
+<div class="viewcode-block" id="SimpleGraph.read_csv">
+<a class="viewcode-back" href="../src_modules.html#simple.SimpleGraph.read_csv">[docs]</a>
+    <span class="k">def</span> <span class="nf">read_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">path_to_edges</span><span class="o">=</span><span class="s1">&#39;edges.csv&#39;</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Load a directed edge list from a CSV (or whitespace-separated) file.</span>
+
+<span class="sd">        The file must contain exactly two columns—source node and destination</span>
+<span class="sd">        node—either comma- or whitespace-separated, with no header row.</span>
+<span class="sd">        Self-loops are dropped with a warning logged at the WARNING level.</span>
+<span class="sd">        The node count is inferred as ``max(source, dest) + 1``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            path_to_edges (str): Path to the edge-list file.</span>
+<span class="sd">                Defaults to ``&#39;edges.csv&#39;``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">csv_hacking</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;na_values&#39;</span><span class="p">:</span> <span class="s1">&#39;undef&#39;</span><span class="p">,</span> <span class="s1">&#39;skipinitialspace&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+        <span class="n">edges</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path_to_edges</span><span class="p">,</span>
+                            <span class="n">header</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                            <span class="n">sep</span><span class="o">=</span><span class="sa">r</span><span class="s2">&quot;,|\s+&quot;</span><span class="p">,</span>
+                            <span class="n">engine</span><span class="o">=</span><span class="s1">&#39;python&#39;</span><span class="p">,</span>
+                            <span class="n">names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;vertex1&#39;</span><span class="p">,</span> <span class="s1">&#39;vertex2&#39;</span><span class="p">],</span>
+                            <span class="o">**</span><span class="n">csv_hacking</span><span class="p">)</span>
+    
+
+        <span class="c1"># edges</span>
+        <span class="c1"># drop self edges</span>
+        <span class="n">indexNames</span> <span class="o">=</span> <span class="n">edges</span><span class="p">[</span><span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex1&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">edges</span><span class="p">[</span><span class="s1">&#39;vertex2&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">index</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indexNames</span><span class="p">):</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Warning: dropping self edges!!!!&quot;</span><span class="p">)</span>
+            <span class="n">edges</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">indexNames</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># fill edges to a graph</span>
+        <span class="n">n_edges</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span>
+        <span class="c1"># edges data&quot;</span>
+
+        <span class="c1"># self.e_source = np.empty(n_edges, dtype=&quot;uint32&quot;)</span>
+        <span class="c1"># self.e_dest = np.empty(n_edges, dtype=&quot;uint32&quot;)</span>
+
+        <span class="c1"># for i, row in tqdm.tqdm(enumerate(edges.itertuples()), total=len(edges)):</span>
+        <span class="c1">#     self.e_source[i] = row.vertex1 # followee  </span>
+        <span class="c1">#     self.e_dest[i] = row.vertex2   # follower</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_source</span> <span class="o">=</span> <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;vertex1&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span> <span class="o">=</span> <span class="n">edges</span><span class="p">[</span><span class="s2">&quot;vertex2&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+            
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">e_source</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">e_dest</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Graph loaded with </span><span class="si">{</span><span class="n">n_edges</span><span class="si">}</span><span class="s2"> edges and </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="si">}</span><span class="s2"> nodes.&quot;</span><span class="p">)</span></div>
+
+        
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">number_of_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Total number of nodes in the graph.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Number of nodes (inferred from the maximum node index in</span>
+<span class="sd">            the edge list, plus one).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+
+
+<div class="viewcode-block" id="SimpleGraph.copy">
+<a class="viewcode-back" href="../src_modules.html#simple.SimpleGraph.copy">[docs]</a>
+    <span class="k">def</span> <span class="nf">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a shallow copy of the graph.</span>
+
+<span class="sd">        Because :class:`SimpleGraph` has no mutable run-time state (unlike</span>
+<span class="sd">        :class:`~graphs.light.LightGraph`) a plain shallow copy is sufficient</span>
+<span class="sd">        to produce an independent graph object for a new simulation run.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            SimpleGraph: A shallow copy of ``self``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span></div>
+</div>
+
+
+    
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

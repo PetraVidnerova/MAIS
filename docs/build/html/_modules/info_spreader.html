@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>info_spreader &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>info_spreader</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for info_spreader</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Information-spreader seeding policy for the MAIS simulation.</span>
+
+<span class="sd">This module defines the :class:`Spreader` policy, which uses PageRank</span>
+<span class="sd">centrality to seed a highly-connected node into state ``I`` at the</span>
+<span class="sd">start of the simulation.  It is intended for use with information-</span>
+<span class="sd">diffusion models rather than epidemic models.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">graph_tool.all</span> <span class="k">as</span> <span class="nn">gt</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">models.agent_info_models</span> <span class="kn">import</span> <span class="n">STATES</span>
+
+<div class="viewcode-block" id="Spreader">
+<a class="viewcode-back" href="../src_modules.html#info_spreader.Spreader">[docs]</a>
+<span class="k">class</span> <span class="nc">Spreader</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Policy that seeds the most central node into the infectious state.</span>
+
+<span class="sd">    On the first simulation day, a ``graph-tool`` graph is built from</span>
+<span class="sd">    the contact network, PageRank centrality is computed (weighted by</span>
+<span class="sd">    edge probability, intensity, and layer weight), and the node at the</span>
+<span class="sd">    requested quantile of centrality is moved to state ``I``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.  Must expose</span>
+<span class="sd">            ``e_source``, ``e_dest``, ``e_probs``, ``e_intensities``,</span>
+<span class="sd">            ``e_types``, ``layer_weights``, and ``num_nodes``.</span>
+<span class="sd">        model: The epidemic model instance (must support</span>
+<span class="sd">            ``change_states`` and ``nodes``).</span>
+<span class="sd">        quantile (float): Quantile in [0, 1] of the centrality</span>
+<span class="sd">            distribution used to select the seed node.</span>
+<span class="sd">            Defaults to 0.9.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="Spreader.__init__">
+<a class="viewcode-back" href="../src_modules.html#info_spreader.Spreader.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">quantile</span><span class="o">=</span><span class="mf">0.9</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the spreader policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            quantile (float): Centrality quantile for seed node</span>
+<span class="sd">                selection.  Defaults to 0.9.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">quantile</span> <span class="o">=</span> <span class="n">quantile</span></div>
+
+
+<div class="viewcode-block" id="Spreader.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#info_spreader.Spreader.first_day_setup">[docs]</a>
+    <span class="k">def</span> <span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Build the weighted graph, compute PageRank, and seed the central node.</span>
+
+<span class="sd">        Constructs an undirected ``graph-tool`` graph with edge weights</span>
+<span class="sd">        equal to ``prob * intensity * layer_weight``, runs PageRank,</span>
+<span class="sd">        and changes the state of the node at ``self.quantile`` of the</span>
+<span class="sd">        centrality distribution to ``STATES.I``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Spreader policy: first day setup&quot;</span><span class="p">)</span>
+
+        <span class="c1"># create graph_tool graph</span>
+        <span class="n">g</span> <span class="o">=</span> <span class="n">gt</span><span class="o">.</span><span class="n">Graph</span><span class="p">(</span><span class="n">directed</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">e_weight</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">new_edge_property</span><span class="p">(</span><span class="s2">&quot;float&quot;</span><span class="p">)</span>
+        <span class="n">g</span><span class="o">.</span><span class="n">add_vertex</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">dest</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">)):</span>
+            <span class="n">e</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">add_edge</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">dest</span><span class="p">)</span>
+            <span class="n">e_weight</span><span class="p">[</span><span class="n">e</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_probs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_intensities</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_types</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span>
+
+        <span class="c1"># get nodes centralities </span>
+        <span class="n">nodes_centralities</span> <span class="o">=</span> <span class="n">gt</span><span class="o">.</span><span class="n">pagerank</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="n">e_weight</span><span class="p">)</span>
+        <span class="n">nodes_centralities</span> <span class="o">=</span> <span class="n">nodes_centralities</span><span class="o">.</span><span class="n">get_array</span><span class="p">()</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">nodes_centralities</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes_centralities</span><span class="p">))</span>
+        <span class="n">indexes</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes_centralities</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">k</span><span class="p">:</span> <span class="n">nodes_centralities</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>        
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">indexes</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes_centralities</span><span class="p">)</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">quantile</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Spreader policy: first day setup, node </span><span class="si">{</span><span class="n">idx</span><span class="si">}</span><span class="s2"> is selected with centrality </span><span class="si">{</span><span class="n">nodes_centralities</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">change_states</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">nodes</span> <span class="o">==</span> <span class="n">idx</span><span class="p">,</span> <span class="n">target_state</span><span class="o">=</span><span class="n">STATES</span><span class="o">.</span><span class="n">I</span><span class="p">)</span></div>
+</div>
+
+ 
+    
+    
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

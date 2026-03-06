@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>run_multi_experiment &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>run_multi_experiment</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for run_multi_experiment</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Command-line script for running many parallel MAIS epidemic simulations.</span>
+
+<span class="sd">This script is the parallel, multi-repetition counterpart of</span>
+<span class="sd">``run_experiment.py``.  It uses a ``Pool`` of worker processes to run</span>
+<span class="sd">``n_repeat`` independent stochastic replicates of the same model and writes</span>
+<span class="sd">the results either into a single ``.zip`` archive (one CSV per replicate,</span>
+<span class="sd">default) or into a combined ``.feather`` file.</span>
+
+<span class="sd">Typical usage::</span>
+
+<span class="sd">    python run_multi_experiment.py config.ini my_run --n_repeat 100 --n_jobs 8</span>
+
+<span class="sd">Output files are written to the directory specified by ``output_dir`` in the</span>
+<span class="sd">config&#39;s ``[TASK]`` section.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">zipfile</span> <span class="kn">import</span> <span class="n">ZipFile</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">copy</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">click</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">timeit</span>
+<span class="kn">import</span> <span class="nn">io</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s1">&#39;../src/&#39;</span><span class="p">))</span>
+
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span><span class="p">,</span> <span class="n">ConfigFileGenerator</span>
+<span class="kn">from</span> <span class="nn">graphs.graph_gen</span> <span class="kn">import</span> <span class="n">GraphGenerator</span>
+<span class="kn">from</span> <span class="nn">models.model_zoo</span> <span class="kn">import</span> <span class="n">model_zoo</span>
+<span class="kn">from</span> <span class="nn">model_m.model_m</span> <span class="kn">import</span> <span class="n">ModelM</span><span class="p">,</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
+<span class="kn">from</span> <span class="nn">utils.pool</span> <span class="kn">import</span> <span class="n">Pool</span>
+
+
+<div class="viewcode-block" id="evaluate_model">
+<a class="viewcode-back" href="../scripts.html#run_multi_experiment.evaluate_model">[docs]</a>
+<span class="k">def</span> <span class="nf">evaluate_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">setup</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one replicate of the model and return its results.</span>
+
+<span class="sd">    This function is designed to be called by a worker process inside</span>
+<span class="sd">    ``utils.pool.Pool``.  It resets the model to a new random seed, runs</span>
+<span class="sd">    the simulation, and returns the resulting DataFrame alongside bookkeeping</span>
+<span class="sd">    information.</span>
+
+<span class="sd">    On ``AssertionError``, the failure is logged to a ``.FAILED`` file and</span>
+<span class="sd">    ``(idx, None, None, None, None)`` is returned so the pool can continue.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model (ModelM): The model instance assigned to this worker.</span>
+<span class="sd">        setup (tuple): A five-element tuple</span>
+<span class="sd">            ``(idx, random_seed, test_id, config, args)`` where</span>
+
+<span class="sd">            * ``idx`` (int) – worker index used to route answers back to the</span>
+<span class="sd">              pool.</span>
+<span class="sd">            * ``random_seed`` (int or None) – seed to pass to ``model.reset``.</span>
+<span class="sd">              ``None`` means the seed is unchanged.</span>
+<span class="sd">            * ``test_id`` (str) – tag appended to output file names.</span>
+<span class="sd">            * ``config`` (ConfigFile) – configuration object (used only for</span>
+<span class="sd">              error reporting).</span>
+<span class="sd">            * ``args`` (tuple) – ``(ndays, print_interval, verbose)`` run</span>
+<span class="sd">              parameters.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: ``(idx, df, deads, random_seed, suffix)`` where</span>
+
+<span class="sd">        * ``idx`` (int) – worker index.</span>
+<span class="sd">        * ``df`` (pandas.DataFrame or None) – per-day state history with an</span>
+<span class="sd">          added ``&quot;id&quot;`` column.</span>
+<span class="sd">        * ``deads`` – always ``None`` in the current implementation.</span>
+<span class="sd">        * ``random_seed`` (int) – actual seed used by the model.</span>
+<span class="sd">        * ``suffix`` (str) – file-name suffix derived from ``test_id``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">my_model</span> <span class="o">=</span> <span class="n">model</span>
+
+    <span class="n">idx</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">test_id</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">setup</span>
+    <span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span> <span class="o">=</span> <span class="n">args</span>
+
+    <span class="n">suffix</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">test_id</span> <span class="k">else</span> <span class="s2">&quot;_&quot;</span> <span class="o">+</span> <span class="n">test_id</span>
+
+    <span class="k">if</span> <span class="n">random_seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">my_model</span><span class="o">.</span><span class="n">reset</span><span class="p">(</span><span class="n">random_seed</span><span class="o">=</span><span class="n">random_seed</span><span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">my_model</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;history</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.FAILED&quot;</span>
+        <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="kn">import</span> <span class="nn">sys</span>
+            <span class="kn">import</span> <span class="nn">traceback</span>
+            <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">tb</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">exc_info</span><span class="p">()</span>
+            <span class="n">traceback</span><span class="o">.</span><span class="n">print_tb</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>  <span class="c1"># Fixed format</span>
+            <span class="n">tb_info</span> <span class="o">=</span> <span class="n">traceback</span><span class="o">.</span><span class="n">extract_tb</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>
+            <span class="n">filename</span><span class="p">,</span> <span class="n">line</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">text</span> <span class="o">=</span> <span class="n">tb_info</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;An error occurred on line </span><span class="si">{</span><span class="n">line</span><span class="si">}</span><span class="s1"> (file: </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s1">) in statement </span><span class="si">{</span><span class="n">text</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">idx</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="c1"># # save history</span>
+    <span class="c1"># file_name = f&quot;history{suffix}.csv&quot;</span>
+    <span class="c1"># config.save(file_name)</span>
+    <span class="c1"># cfg_string = &quot;&quot;</span>
+    <span class="c1"># with open(file_name, &quot;r&quot;) as f:</span>
+    <span class="c1">#     cfg_string = &quot;#&quot; + &quot;#&quot;.join(f.readlines())</span>
+    <span class="c1"># with open(file_name, &quot;w&quot;) as f:</span>
+    <span class="c1">#     f.write(cfg_string)</span>
+    <span class="c1">#     f.write(f&quot;# RANDOM_SEED = {my_model.model.random_seed}\n&quot;)</span>
+    <span class="c1">#     my_model.save_history(f)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">my_model</span><span class="o">.</span><span class="n">get_df</span><span class="p">()</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">test_id</span>
+    <span class="n">random_seed</span> <span class="o">=</span> <span class="n">my_model</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">random_seed</span>
+
+    <span class="c1"># with open(f&quot;durations{suffix}.csv&quot;, &quot;w&quot;) as f:</span>
+    <span class="c1">#    my_model.model.save_durations(f)</span>
+    <span class="c1"># with open(f&quot;infect_time{suffix}.csv&quot;, &quot;w&quot;) as f:</span>
+    <span class="c1">#    for i in range(my_model.model.num_nodes):</span>
+    <span class="c1">#        f.write(f&quot;{my_model.model.infect_time[i]},&quot;)</span>
+
+    <span class="c1"># save_source_infection = False</span>
+    <span class="c1"># if save_source_infection:</span>
+    <span class="c1">#     with open(f&quot;sources{suffix}.csv&quot;, &quot;w&quot;) as f:</span>
+    <span class="c1">#         model.model.df_source_infection().to_csv(f)</span>
+
+    <span class="c1"># save_dead = True</span>
+    <span class="c1"># if save_dead:</span>
+    <span class="c1">#     with open(f&quot;dead{suffix}.csv&quot;, &quot;w&quot;) as f:</span>
+    <span class="c1">#         alld, young, old1, old2 = model.model.get_dead()</span>
+    <span class="c1">#         print(f&quot;{alld},{young},{old1},{old2}&quot;, file=f)</span>
+
+    <span class="k">if</span> <span class="kc">False</span><span class="p">:</span>
+        <span class="n">deads</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">([</span><span class="n">idx</span><span class="p">,</span> <span class="o">*</span><span class="n">model</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">get_dead</span><span class="p">()])</span>
+    <span class="k">else</span><span class="p">:</span> 
+        <span class="n">deads</span> <span class="o">=</span> <span class="kc">None</span>  
+
+    <span class="k">return</span> <span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">deads</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span></div>
+
+<span class="c1">#    del my_model</span>
+
+
+<div class="viewcode-block" id="demo">
+<a class="viewcode-back" href="../scripts.html#run_multi_experiment.demo">[docs]</a>
+<span class="k">def</span> <span class="nf">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">test_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>  <span class="n">print_interval</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_repeat</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+         <span class="n">output_type</span><span class="o">=</span><span class="s2">&quot;ZIP&quot;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run many parallel epidemic model replicates and aggregate their output.</span>
+
+<span class="sd">    Loads the graph once, creates ``n_jobs`` duplicates of the model, and</span>
+<span class="sd">    feeds tasks into a ``Pool``.  Results arrive asynchronously and are written</span>
+<span class="sd">    to disk on the fly (ZIP mode) or collected in memory and written at the</span>
+<span class="sd">    end (FEATHER mode).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cf (ConfigFile): Loaded configuration object describing the experiment.</span>
+<span class="sd">        test_id (str or None): Tag appended to output file and archive names.</span>
+<span class="sd">            Defaults to ``None`` (no tag).</span>
+<span class="sd">        model_random_seed (int or list[int]): Base seed (or explicit list of</span>
+<span class="sd">            seeds for each replicate).  When an integer, seeds for replicates</span>
+<span class="sd">            ``i`` are ``model_random_seed + i``.  Defaults to ``42``.</span>
+<span class="sd">        print_interval (int): Simulated-day interval for progress output.</span>
+<span class="sd">            Defaults to ``1``.</span>
+<span class="sd">        n_repeat (int): Total number of replicates to run.  Defaults to ``1``.</span>
+<span class="sd">        n_jobs (int): Number of parallel worker processes.  Defaults to ``1``.</span>
+<span class="sd">        output_type (str): Output format – ``&quot;ZIP&quot;`` (default) saves each</span>
+<span class="sd">            replicate as a separate CSV inside a zip archive; ``&quot;FEATHER&quot;``</span>
+<span class="sd">            concatenates all results into a single feather file.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If ``output_type`` is not ``&quot;ZIP&quot;`` or ``&quot;FEATHER&quot;``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#cf = ConfigFile()</span>
+    <span class="c1">#cf.load(filename)</span>
+    <span class="n">graph</span> <span class="o">=</span> <span class="n">load_graph</span><span class="p">(</span><span class="n">cf</span><span class="p">)</span>
+
+    <span class="n">result_dfs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">result_series</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">ndays</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span> <span class="mi">60</span><span class="p">)</span>
+    <span class="n">print_interval</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;print_interval&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">verbose</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;verbose&quot;</span><span class="p">,</span> <span class="s2">&quot;Yes&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+    <span class="n">output_dir</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;output_dir&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_type</span> <span class="o">==</span> <span class="s2">&quot;ZIP&quot;</span><span class="p">:</span>
+        <span class="n">suffix</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">test_id</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+        <span class="n">zip_filename</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;history</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.zip&quot;</span><span class="p">)</span>
+        <span class="c1"># prepare emtpy zip file</span>
+        <span class="k">with</span> <span class="n">ZipFile</span><span class="p">(</span><span class="n">zip_filename</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">_</span><span class="p">:</span>
+            <span class="k">pass</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_random_seed</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+        <span class="n">model_random_seed</span> <span class="o">=</span> <span class="p">[</span><span class="n">model_random_seed</span> <span class="o">+</span> <span class="n">i</span>
+                             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_repeat</span><span class="p">)</span>
+                             <span class="p">]</span>
+
+    <span class="c1"># create model</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">load_model_from_config</span><span class="p">(</span>
+        <span class="n">cf</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">preloaded_graph</span><span class="o">=</span><span class="n">graph</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;model loaded&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># run parameters</span>
+
+    <span class="k">if</span> <span class="n">test_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">test_id</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+
+    <span class="n">models</span> <span class="o">=</span> <span class="p">[</span><span class="n">model</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">):</span>
+        <span class="n">models</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">duplicate</span><span class="p">(</span><span class="n">random_seed</span><span class="o">=</span><span class="n">model_random_seed</span><span class="p">[</span><span class="n">i</span><span class="p">]))</span>
+
+    <span class="n">pool</span> <span class="o">=</span> <span class="n">Pool</span><span class="p">(</span><span class="n">processors</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span> <span class="n">evalfunc</span><span class="o">=</span><span class="n">evaluate_model</span><span class="p">,</span> <span class="n">models</span><span class="o">=</span><span class="n">models</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_jobs</span><span class="p">):</span>
+        <span class="n">pool</span><span class="o">.</span><span class="n">putQuerry</span><span class="p">((</span><span class="n">i</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">cf</span><span class="p">,</span> <span class="p">(</span><span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span><span class="p">)))</span>
+
+    <span class="n">i</span> <span class="o">=</span> <span class="n">n_jobs</span>
+    <span class="n">answers</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">def</span> <span class="nf">_process_answer</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">ser</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">output_type</span> <span class="o">==</span> <span class="s2">&quot;FEATHER&quot;</span><span class="p">:</span>
+            <span class="n">result_dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+            <span class="n">result_series</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ser</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">output_type</span> <span class="o">==</span> <span class="s2">&quot;ZIP&quot;</span><span class="p">:</span>
+            <span class="n">save_to_zipped_csv</span><span class="p">(</span><span class="n">test_id</span><span class="p">,</span>
+                               <span class="n">idx</span><span class="p">,</span>
+                               <span class="n">df</span><span class="p">,</span>
+                               <span class="n">cf</span><span class="p">,</span>
+                               <span class="n">random_seed</span><span class="p">,</span>
+                               <span class="n">suffix</span><span class="p">,</span>
+                               <span class="n">zip_filename</span><span class="p">)</span>
+            <span class="n">result_series</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ser</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;unknown output_type option&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Simulation </span><span class="si">{</span><span class="n">suffix</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">suffix</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="n">suffix</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span><span class="si">}</span><span class="s2"> finished.&quot;</span><span class="p">)</span>
+
+    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n_repeat</span><span class="p">:</span>
+        <span class="n">answer</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">getAnswer</span><span class="p">()</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">answer</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">_process_answer</span><span class="p">(</span><span class="o">*</span><span class="n">answer</span><span class="p">)</span>
+        <span class="n">answers</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">pool</span><span class="o">.</span><span class="n">putQuerry</span><span class="p">((</span><span class="n">idx</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="p">[</span><span class="n">i</span><span class="p">],</span>
+                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">cf</span><span class="p">,</span> <span class="p">(</span><span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span><span class="p">)))</span>
+        <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">answers</span><span class="p">,</span> <span class="n">n_repeat</span><span class="p">):</span>
+        <span class="n">_process_answer</span><span class="p">(</span><span class="o">*</span><span class="n">pool</span><span class="o">.</span><span class="n">getAnswer</span><span class="p">())</span>
+
+    <span class="n">pool</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;pool closed&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_type</span> <span class="o">==</span> <span class="s2">&quot;FEATHER&quot;</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Concatenate results&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">result_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">result_dfs</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Done.&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="n">suffix</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">test_id</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;history</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.feather&quot;</span>
+        <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
+        <span class="n">result_df</span><span class="o">.</span><span class="n">to_feather</span><span class="p">(</span><span class="n">file_name</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="kc">False</span><span class="p">:</span>
+        <span class="n">result_df2</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">result_series</span><span class="p">)</span>
+        <span class="n">result_df2</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;all&quot;</span><span class="p">,</span> <span class="s2">&quot;&lt;65&quot;</span><span class="p">,</span> <span class="s2">&quot;65-79&quot;</span><span class="p">,</span> <span class="s2">&quot;80+&quot;</span><span class="p">]</span>
+
+        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;deads_all</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.csv&quot;</span>
+        <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
+        <span class="n">result_df2</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">file_name</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;finished&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="save_to_zipped_csv">
+<a class="viewcode-back" href="../scripts.html#run_multi_experiment.save_to_zipped_csv">[docs]</a>
+<span class="k">def</span> <span class="nf">save_to_zipped_csv</span><span class="p">(</span><span class="n">test_id</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">,</span> <span class="n">zipname</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Append a single replicate&#39;s result DataFrame to a shared ZIP archive.</span>
+
+<span class="sd">    The CSV content is preceded by the configuration file text (each line</span>
+<span class="sd">    prefixed with ``#``) and the random seed, matching the single-run CSV</span>
+<span class="sd">    format produced by ``run_experiment.py``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        test_id (str): Experiment tag (used only for internal bookkeeping;</span>
+<span class="sd">            the file name is derived from ``suffix``).</span>
+<span class="sd">        idx (int): Replicate index (unused in the current implementation;</span>
+<span class="sd">            reserved for future use).</span>
+<span class="sd">        df (pandas.DataFrame): Per-day simulation results to write.</span>
+<span class="sd">        config (ConfigFile): Configuration object whose string representation</span>
+<span class="sd">            is prepended as comments.</span>
+<span class="sd">        random_seed (int): Actual random seed used for this replicate.</span>
+<span class="sd">        suffix (str): File-name suffix that forms part of the entry name</span>
+<span class="sd">            inside the archive (e.g. ``&quot;_my_run_3&quot;``).</span>
+<span class="sd">        zipname (str): Path to the ZIP archive to append to.  The archive</span>
+<span class="sd">            must already exist (created by the caller).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;history</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.csv&quot;</span>
+
+    <span class="n">cfg_string</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">to_string</span><span class="p">()</span>
+    <span class="c1"># prepand all lines with #</span>
+    <span class="n">cfg_string</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="nb">map</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="s2">&quot;#&quot;</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span>
+            <span class="n">cfg_string</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">cfg_string</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2"># RANDOM_SEED = </span><span class="si">{</span><span class="n">random_seed</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
+
+    <span class="k">with</span> <span class="n">io</span><span class="o">.</span><span class="n">StringIO</span><span class="p">()</span> <span class="k">as</span> <span class="n">df_str</span><span class="p">:</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">df_str</span><span class="p">)</span>
+        <span class="n">model_string</span> <span class="o">=</span> <span class="n">df_str</span><span class="o">.</span><span class="n">getvalue</span><span class="p">()</span>
+
+    <span class="n">output_string</span> <span class="o">=</span> <span class="n">cfg_string</span> <span class="o">+</span> <span class="n">model_string</span>
+    <span class="k">with</span> <span class="n">ZipFile</span><span class="p">(</span><span class="n">zipname</span><span class="p">,</span> <span class="s2">&quot;a&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">zf</span><span class="p">:</span>
+        <span class="n">zf</span><span class="o">.</span><span class="n">writestr</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="n">output_string</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@click</span><span class="o">.</span><span class="n">command</span><span class="p">()</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--const-random-seed/--no-random-seed&#39;</span><span class="p">,</span> <span class="s1">&#39; /-r&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--user-random-seeds&#39;</span><span class="p">,</span> <span class="s1">&#39;-R&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--print_interval&#39;</span><span class="p">,</span>  <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--n_repeat&#39;</span><span class="p">,</span>  <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--n_jobs&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--log_level&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;CRITICAL&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Logging level.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--output_type&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;ZIP&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;ZIP or FEATHER. ZIP produces `n_repeat` output csv files in one zip archive. FEATHER produces one big data frame in feather file.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;filename&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;example.ini&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;test_id&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">test</span><span class="p">(</span><span class="n">const_random_seed</span><span class="p">,</span>  <span class="n">user_random_seeds</span><span class="p">,</span>  <span class="n">print_interval</span><span class="p">,</span> <span class="n">n_repeat</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">log_level</span><span class="p">,</span> <span class="n">output_type</span><span class="p">,</span>
+         <span class="n">filename</span><span class="p">,</span> <span class="n">test_id</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot; Run the demo test inside the timeit &quot;&quot;&quot;</span>
+
+    <span class="n">random_seed</span> <span class="o">=</span> <span class="mi">42</span> <span class="k">if</span> <span class="n">const_random_seed</span> <span class="k">else</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10000</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">user_random_seeds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">user_random_seeds</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">random_seeds</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">random_seeds</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">line</span><span class="o">.</span><span class="n">strip</span><span class="p">()))</span>
+            <span class="n">random_seed</span> <span class="o">=</span> <span class="n">random_seeds</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span><span class="nb">format</span><span class="o">=</span><span class="s1">&#39;</span><span class="si">%(levelname)s</span><span class="s1">:</span><span class="si">%(module)s</span><span class="s1">:</span><span class="si">%(lineno)d</span><span class="s1">: </span><span class="si">%(message)s</span><span class="s1">&#39;</span><span class="p">,</span>
+                        <span class="n">level</span><span class="o">=</span><span class="n">log_level</span><span class="p">)</span>
+
+    <span class="n">cf_generator</span> <span class="o">=</span> <span class="n">ConfigFileGenerator</span><span class="p">()</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">cf</span> <span class="ow">in</span> <span class="n">cf_generator</span><span class="p">:</span>
+        <span class="n">my_id</span> <span class="o">=</span> <span class="n">test_id</span>
+        <span class="n">suffix</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;OUTPUT_ID&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>    
+        <span class="nb">print</span><span class="p">(</span><span class="n">suffix</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">suffix</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">my_id</span> <span class="o">+=</span> <span class="n">suffix</span>
+
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running </span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">demo_fce</span><span class="p">():</span> <span class="k">return</span> <span class="n">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">my_id</span><span class="p">,</span>
+                                    <span class="n">model_random_seed</span><span class="o">=</span><span class="n">random_seed</span><span class="p">,</span>  <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">,</span>
+                                    <span class="n">n_repeat</span><span class="o">=</span><span class="n">n_repeat</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span>
+                                    <span class="n">output_type</span><span class="o">=</span><span class="n">output_type</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">timeit</span><span class="o">.</span><span class="n">timeit</span><span class="p">(</span><span class="n">demo_fce</span><span class="p">,</span> <span class="n">number</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">test</span><span class="p">()</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

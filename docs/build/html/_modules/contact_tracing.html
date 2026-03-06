@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>contact_tracing &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>contact_tracing</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for contact_tracing</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Contact-tracing policy for the MAIS epidemic simulation.</span>
+
+<span class="sd">This module extends :class:`~policies.testing_policy.TestingPolicy`</span>
+<span class="sd">with contact tracing.  Positively tested nodes are asked for their</span>
+<span class="sd">recent contacts; those contacts receive a phone call, are placed into</span>
+<span class="sd">quarantine, and undergo an enter test.  Contacts that test positive</span>
+<span class="sd">trigger a second round of tracing.</span>
+
+<span class="sd">Several pre-configured variants are provided (e.g.</span>
+<span class="sd">:class:`CRLikePolicy`, :class:`StrongEvaQuarantinePolicy`, and a</span>
+<span class="sd">family of ``W*QuarantinePolicy`` classes with uniform riskiness).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">chain</span>
+
+<span class="kn">from</span> <span class="nn">policies.testing_policy</span> <span class="kn">import</span> <span class="n">TestingPolicy</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">from</span> <span class="nn">models.agent_based_network_model</span> <span class="kn">import</span> <span class="n">STATES</span>
+
+
+<span class="kn">from</span> <span class="nn">policies.depo</span> <span class="kn">import</span> <span class="n">Depo</span>
+
+<span class="kn">from</span> <span class="nn">policies.quarantine_coefs</span> <span class="kn">import</span> <span class="n">QUARANTINE_COEFS</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS</span>
+<span class="kn">from</span> <span class="nn">policies.quarantine_coefs</span> <span class="kn">import</span> <span class="n">RISK_FOR_LAYERS_MAX</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_MINI</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_60</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_10</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_30</span>
+<span class="kn">from</span> <span class="nn">policies.quarantine_coefs</span> <span class="kn">import</span> <span class="n">get_riskiness</span>
+
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">cfgs</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">ContactTracingPolicy</span><span class="p">(</span><span class="n">TestingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Testing policy extended with contact tracing.</span>
+
+<span class="sd">    Individuals with symptoms go for a test with a certain probability.</span>
+<span class="sd">    Those who test positive undergo contact tracing: their recent</span>
+<span class="sd">    contacts are identified, placed in a phone-call waiting queue, then</span>
+<span class="sd">    quarantined and given an enter test.  Contacts that test positive</span>
+<span class="sd">    trigger a further round of contact tracing.</span>
+
+<span class="sd">    Key configurable parameters (set directly or via config file):</span>
+
+<span class="sd">    * ``duration`` – isolation length for confirmed cases (default 10).</span>
+<span class="sd">    * ``duration_quara`` – quarantine length for contacts (default 14).</span>
+<span class="sd">    * ``days_back`` – how many days of contact history to trace</span>
+<span class="sd">      (default 7).</span>
+<span class="sd">    * ``phone_call_delay`` – days between identification and quarantine</span>
+<span class="sd">      notification (default 2).</span>
+<span class="sd">    * ``enter_test_delay`` – days after last contact at which the enter</span>
+<span class="sd">      test is performed (default 5).</span>
+<span class="sd">    * ``riskiness`` – per-layer recall probability array.</span>
+<span class="sd">    * ``auto_recover`` – skip exit test; release automatically.</span>
+<span class="sd">    * ``enter_test`` – whether to perform an enter test for contacts.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to an INI-style configuration</span>
+<span class="sd">            file with sections ``[ISOLATION]``, ``[QUARANTINE]``, and</span>
+<span class="sd">            ``[CONTACT_TRACING]``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ContactTracingPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the contact-tracing policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">QUARANTINE_COEFS</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="mi">10</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration_quara</span> <span class="o">=</span> <span class="mi">14</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span> <span class="o">=</span> <span class="mi">7</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span> <span class="o">=</span> <span class="mi">2</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_delay</span> <span class="o">=</span> <span class="mi">5</span>
+
+        <span class="c1"># if node already passed enter test and it was negative</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="c1"># the day of the last contact with infectious node, -1 for undefined</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last_contact</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># no final condititon</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span>    <span class="c1"># do enter test</span>
+
+        <span class="k">if</span> <span class="n">config_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">load_config</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CONTACT TRACING POLICY: riskiness is </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># nodes marked as contacts and waiting for being informed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for enter-test</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for enter-test result</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_result_enter_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for second test</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># statistics</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_enter_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.load_config">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.load_config">[docs]</a>
+    <span class="k">def</span> <span class="nf">load_config</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config_file</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Load policy parameters from a configuration file.</span>
+
+<span class="sd">        Reads the ``[ISOLATION]``, ``[QUARANTINE]``, and</span>
+<span class="sd">        ``[CONTACT_TRACING]`` sections and updates the corresponding</span>
+<span class="sd">        instance attributes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            config_file (str): Path to the INI-style configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+        <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+
+        <span class="n">isolation</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;ISOLATION&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="n">isolation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span><span class="p">)</span>
+
+        <span class="n">quarantine</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;QUARANTINE&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration_quara</span> <span class="o">=</span> <span class="n">quarantine</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;DURATION&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration_quara</span><span class="p">)</span>
+
+        <span class="n">tracing</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;CONTACT_TRACING&quot;</span><span class="p">)</span>
+        <span class="n">cfg_riskiness</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;riskiness&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cfg_riskiness</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">cfg_riskiness</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">cfg_riskiness</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="o">*</span><span class="n">cfg_riskiness</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;days_back&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">&quot;phone_call_delay&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_delay</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">&quot;enter_test_delay&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_delay</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">&quot;auto_recover&quot;</span><span class="p">,</span> <span class="s2">&quot;Yes&quot;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="k">else</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="n">tracing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">&quot;enter_test&quot;</span><span class="p">,</span> <span class="s2">&quot;Yes&quot;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="k">else</span> <span class="s2">&quot;No&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.first_day_setup">[docs]</a>
+    <span class="k">def</span> <span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise statistics arrays and call the parent first-day setup.</span>
+
+<span class="sd">        Fills ``stat_positive_enter_tests`` and</span>
+<span class="sd">        ``stat_contacts_collected`` with zeros for all days before the</span>
+<span class="sd">        policy starts, then delegates to</span>
+<span class="sd">        :meth:`TestingPolicy.first_day_setup`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># fill the days before start by zeros</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_enter_tests</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">first_day_setup</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.select_contacts">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.select_contacts">[docs]</a>
+    <span class="k">def</span> <span class="nf">select_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Trace recent contacts of detected nodes.</span>
+
+<span class="sd">        For each detected node the contact history is searched back up</span>
+<span class="sd">        to two days before first symptoms, or at most ``self.days_back``</span>
+<span class="sd">        days.  Contacts are stochastically filtered by layer riskiness</span>
+<span class="sd">        and external/dead nodes are excluded.  The ``last_contact``</span>
+<span class="sd">        timestamp for each found contact is updated.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (numpy.ndarray): Indices of nodes whose</span>
+<span class="sd">                contacts should be traced.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            set: Set of node indices identified as contacts.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">contacts</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">contacts</span>
+
+        <span class="c1"># for each node trace back 2 days before first symtoms but</span>
+        <span class="c1"># at most (or if there are no symptoms) self.days_back days</span>
+        <span class="c1"># (no symptoms -&gt; first_symptoms == -1)</span>
+        <span class="n">days_back_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_symptoms</span><span class="p">[</span><span class="n">detected_nodes</span><span class="p">])</span> <span class="o">+</span> <span class="mi">2</span><span class="p">,</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">detected_nodes</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;is beeing asked for contacts for </span><span class="si">{</span><span class="n">days_back_array</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">detected_nodes</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2"> days back.&quot;</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">node</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">):</span>
+
+            <span class="n">days_back</span> <span class="o">=</span> <span class="n">days_back_array</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">t</span><span class="p">,</span> <span class="n">day_list</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">contact_history</span><span class="p">[</span><span class="o">-</span><span class="n">days_back</span><span class="p">:]):</span>
+                <span class="k">if</span> <span class="n">day_list</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># first iterations</span>
+                    <span class="k">continue</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">day_list</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="k">continue</span>
+                <span class="c1"># daylist is tuple (source_nodes, dest_nodes, types) including both directions</span>
+                <span class="n">my_edges</span> <span class="o">=</span> <span class="n">day_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">node</span>
+                <span class="n">selected_contacts</span> <span class="o">=</span> <span class="n">day_list</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="n">my_edges</span><span class="p">]</span>
+                <span class="n">types</span> <span class="o">=</span> <span class="n">day_list</span><span class="p">[</span><span class="mi">2</span><span class="p">][</span><span class="n">my_edges</span><span class="p">]</span>
+
+                <span class="n">selected_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">selected_contacts</span><span class="p">,</span> <span class="n">types</span><span class="p">)</span>
+                <span class="n">selected_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_out_ext</span><span class="p">(</span><span class="n">selected_contacts</span><span class="p">)</span>
+                <span class="n">selected_contacts</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_dead</span><span class="p">(</span><span class="n">selected_contacts</span><span class="p">)</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">last_contact</span><span class="p">[</span><span class="n">selected_contacts</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">last_contact</span><span class="p">[</span><span class="n">selected_contacts</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="n">days_back</span> <span class="o">+</span> <span class="n">t</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+
+                <span class="n">contacts</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">selected_contacts</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">contacts</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.filter_out_ext">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.filter_out_ext">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter_out_ext</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">contacts</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Remove external (EXT-state) nodes from a contacts array.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            contacts (numpy.ndarray): Array of node indices to filter.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Subset of ``contacts`` not in state ``EXT``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">is_not_ext</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">,</span> <span class="n">contacts</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="k">return</span> <span class="n">contacts</span><span class="p">[</span><span class="n">is_not_ext</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.filter">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.filter">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">contacts</span><span class="p">,</span> <span class="n">types</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Stochastically filter contacts by layer riskiness.</span>
+
+<span class="sd">        Each contact is retained with probability equal to the</span>
+<span class="sd">        riskiness of its contact-layer type (``self.riskiness[type]``).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            contacts (numpy.ndarray): Array of node indices.</span>
+<span class="sd">            types (numpy.ndarray): Integer array of layer types</span>
+<span class="sd">                corresponding to each contact in ``contacts``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Subset of ``contacts`` that are recalled.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">risk</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span><span class="p">[</span><span class="n">types</span><span class="p">]</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">risk</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">contacts</span><span class="p">[</span><span class="n">r</span> <span class="o">&lt;</span> <span class="n">risk</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.stop">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.stop">[docs]</a>
+    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop quarantining new nodes.</span>
+
+<span class="sd">        After calling ``stop``, existing quarantines are still managed</span>
+<span class="sd">        but no new nodes are placed into isolation or quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.select_test_candidates">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.select_test_candidates">[docs]</a>
+    <span class="k">def</span> <span class="nf">select_test_candidates</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Select test candidates, excluding nodes already in isolation/quarantine.</span>
+
+<span class="sd">        Delegates to the parent :meth:`TestingPolicy.select_test_candidates`</span>
+<span class="sd">        and then filters out any node already held in the deposit.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of node indices to be tested today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">test_candidates</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">select_test_candidates</span><span class="p">()</span>
+        <span class="c1"># exclude those that are already in quarantine</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">filter_locked</span><span class="p">(</span><span class="n">test_candidates</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.process_detected_nodes">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.process_detected_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">process_detected_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Isolate detected nodes, release finished quarantines, and run contact tracing.</span>
+
+<span class="sd">        Workflow each time-step:</span>
+
+<span class="sd">        1. Advance the deposit and process leaving nodes.</span>
+<span class="sd">        2. Isolate ``target_nodes``.</span>
+<span class="sd">        3. Trace contacts of ``target_nodes``; notify contacts via</span>
+<span class="sd">           phone-call queue.</span>
+<span class="sd">        4. Run enter-test procedure for contacts whose phone-call</span>
+<span class="sd">           delay has elapsed.</span>
+<span class="sd">        5. Trace contacts of enter-test positives and add them to the</span>
+<span class="sd">           notification queue.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            target_nodes (numpy.ndarray): Indices of nodes newly</span>
+<span class="sd">                detected (positive test result) today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tick</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">leaving_procedure</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantine_nodes</span><span class="p">(</span><span class="n">target_nodes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">target_nodes</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;is sent to isolation.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># nodes asked for contacts</span>
+        <span class="n">contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">select_contacts</span><span class="p">(</span><span class="n">target_nodes</span><span class="p">)</span>
+
+        <span class="c1"># phone call</span>
+        <span class="n">contacted</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">contacted</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">contacted</span> <span class="o">=</span> <span class="n">contacted</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span><span class="p">[</span><span class="n">contacted</span><span class="p">]</span> <span class="o">==</span> <span class="kc">False</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">contacted</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;recieves a phone call and is sent to quarantine.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantine_nodes</span><span class="p">(</span><span class="n">contacted</span><span class="p">,</span> <span class="n">last_contacts</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                              <span class="n">duration</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">duration_quara</span><span class="p">)</span>
+
+        <span class="c1"># enter test</span>
+        <span class="n">positive_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_procedure</span><span class="p">(</span><span class="n">contacted</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">positive_contacts</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;has positive enter test.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># another contacts</span>
+        <span class="n">another_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">select_contacts</span><span class="p">(</span><span class="n">positive_contacts</span><span class="p">)</span>
+
+        <span class="c1"># contacts contacted</span>
+        <span class="c1">#all_contacts = np.union1d(contacts, another_contacts)</span>
+        <span class="c1">#        all_contacts = np.array(list(set(chain(contacts, another_contacts))))</span>
+        <span class="n">all_contacts</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">contacts</span><span class="o">.</span><span class="n">union</span><span class="p">(</span><span class="n">another_contacts</span><span class="p">)))</span>
+        <span class="c1"># if len(all_contacts) &gt; 0:</span>
+        <span class="c1">#     # filter out already detected</span>
+        <span class="c1">#     all_contacts = all_contacts[self.model.node_detected[all_contacts] == False]</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">all_contacts</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;is marked as contact and waits for phone call.&quot;</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;all contacts: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">all_contacts</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1">#all_contacts = np.array(list(set(contacts + another_contacts)))</span>
+        <span class="c1"># print(contacts)</span>
+        <span class="c1"># print(another_contacts)</span>
+        <span class="c1">#all_contacts = np.union1d(contacts, another_contacts).astype(int)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_contacts</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">all_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">filter_locked</span><span class="p">(</span><span class="n">all_contacts</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_contacts</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># print(all_contacts)</span>
+                <span class="n">all_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">filter_locked</span><span class="p">(</span>
+                    <span class="n">all_contacts</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_contacts</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span>
+                        <span class="n">all_contacts</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span>
+                        <span class="n">all_contacts</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.enter_test_procedure">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.enter_test_procedure">[docs]</a>
+    <span class="k">def</span> <span class="nf">enter_test_procedure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">contacts</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Register contacts for an enter test and process those ready to be tested.</span>
+
+<span class="sd">        ``contacts`` are added to the enter-test waiting room.  Nodes</span>
+<span class="sd">        that have waited long enough are tested; positive results are</span>
+<span class="sd">        counted and returned.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            contacts (numpy.ndarray): Indices of newly quarantined</span>
+<span class="sd">                contacts to register for an enter test.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Indices of contacts who tested positive</span>
+<span class="sd">            during today&#39;s enter tests.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span>
+
+        <span class="n">to_be_tested</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="n">to_be_tested</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_dead</span><span class="p">(</span><span class="n">to_be_tested</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">to_be_tested</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;goes for enter test.&quot;</span><span class="p">)</span>
+
+        <span class="n">contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span><span class="o">.</span><span class="n">filter_locked</span><span class="p">(</span><span class="n">contacts</span><span class="p">)</span>
+        <span class="n">enter_test_delay</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">last_contact</span><span class="p">[</span><span class="n">contacts</span><span class="p">]</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">)</span> <span class="o">+</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_delay</span><span class="p">,</span>
+            <span class="mi">1</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_delay</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">contacts</span><span class="p">,</span> <span class="n">enter_test_delay</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">contacts</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;is going to wait for enter test for </span><span class="si">{</span><span class="n">enter_test_delay</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">contacts</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+        <span class="n">healthy</span><span class="p">,</span> <span class="n">ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">to_be_tested</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">healthy</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span><span class="p">[</span><span class="n">healthy</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_enter_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">ill</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.leaving_procedure">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.leaving_procedure">[docs]</a>
+    <span class="k">def</span> <span class="nf">leaving_procedure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Process nodes whose isolation/quarantine period has elapsed.</span>
+
+<span class="sd">        If ``auto_recover`` is ``False``, nodes are tested:</span>
+
+<span class="sd">        * Those still ill remain for two more days.</span>
+<span class="sd">        * Those with a negative enter test are released immediately.</span>
+<span class="sd">        * Those without a prior negative enter test wait two more days</span>
+<span class="sd">          for a confirmatory second test.</span>
+
+<span class="sd">        If ``auto_recover`` is ``True``, all nodes are released</span>
+<span class="sd">        immediately without testing.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Indices of nodes released from the</span>
+<span class="sd">                deposit today (i.e. their timer reached zero).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;goes for leaving test.&quot;</span><span class="p">)</span>
+
+            <span class="n">nodes</span><span class="p">,</span> <span class="n">dead</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_dead</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+            <span class="n">recovered</span><span class="p">,</span> <span class="n">still_ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">still_ill</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span><span class="p">[</span><span class="n">still_ill</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">still_ill</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">still_ill</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;will wait in quarantine/isolation another 2 days.&quot;</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">recovered</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">to_release</span> <span class="o">=</span> <span class="n">recovered</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span><span class="p">[</span><span class="n">recovered</span><span class="p">]]</span>
+                <span class="n">to_retest</span> <span class="o">=</span> <span class="n">recovered</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span><span class="p">[</span><span class="n">recovered</span><span class="p">]</span> <span class="o">==</span> <span class="kc">False</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">to_release</span> <span class="o">=</span> <span class="p">[]</span>
+                <span class="n">to_retest</span> <span class="o">=</span> <span class="p">[]</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">to_release</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;leaves qurantine/isolation with negative enter test and negative leaving test.&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">to_retest</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;waits for second leaving test.&quot;</span><span class="p">)</span>
+
+            <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">released</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;leaves quarantine/isolation with two negative leaving tests.&quot;</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">to_retest</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">to_retest</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">to_release</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">released</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">union1d</span><span class="p">(</span><span class="n">released</span><span class="p">,</span> <span class="n">to_release</span><span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># auto recover</span>
+            <span class="n">released</span> <span class="o">=</span> <span class="n">nodes</span>
+            <span class="n">dead</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">released</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;releasing </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span><span class="si">}</span><span class="s2"> nodes from isolation&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">negative_enter_test</span><span class="p">[</span><span class="n">released</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># for next time</span>
+
+        <span class="k">if</span> <span class="n">dead</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">dead</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;releasing </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span><span class="si">}</span><span class="s2"> dead nodes from isolation&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">dead</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">dead</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.run">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the contact-tracing policy.</span>
+
+<span class="sd">        Resets daily statistics counters and then delegates to the</span>
+<span class="sd">        parent :meth:`TestingPolicy.run`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_enter_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="ContactTracingPolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.ContactTracingPolicy.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame with testing and contact-tracing statistics.</span>
+
+<span class="sd">        Extends the parent :meth:`TestingPolicy.to_df` result with</span>
+<span class="sd">        columns ``positive_enter_test`` and ``contacts_collected``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: DataFrame indexed by time ``T``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;positive_enter_test&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_enter_tests</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;contacts_collected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="n">df</span></div>
+</div>
+
+
+
+<span class="c1"># variants - should be done using config</span>
+
+<div class="viewcode-block" id="CRLikePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.CRLikePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">CRLikePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy that mimics the Czech Republic (CR) approach.</span>
+
+<span class="sd">    Applies a time-varying riskiness schedule that adjusts contact-recall</span>
+<span class="sd">    probabilities at several hard-coded simulation days to reflect</span>
+<span class="sd">    changing intervention intensity.  If a config file is provided it</span>
+<span class="sd">    overrides the built-in schedule.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to a configuration file that</span>
+<span class="sd">            overrides the built-in riskiness schedule.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="CRLikePolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.CRLikePolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the CR-like policy with a time-varying riskiness schedule.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>  <span class="c1"># run it without loading config</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.01</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="c1"># reconfig</span>
+        <span class="k">for</span> <span class="n">date</span> <span class="ow">in</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">66</span><span class="p">,</span> <span class="mi">125</span><span class="p">,</span> <span class="mi">188</span><span class="p">,</span> <span class="mi">300</span><span class="p">,</span> <span class="mi">311</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span> <span class="o">&gt;=</span> <span class="n">date</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">reconfig</span><span class="p">(</span><span class="n">date</span><span class="p">)</span>
+
+        <span class="c1"># if config file provided, override the setup</span>
+        <span class="c1"># do not forget about reconfig</span>
+        <span class="k">if</span> <span class="n">config_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">load_config</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CRLikePolicy.reconfig">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.CRLikePolicy.reconfig">[docs]</a>
+    <span class="k">def</span> <span class="nf">reconfig</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">day</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply riskiness configuration for a specific simulation day.</span>
+
+<span class="sd">        Called both during ``__init__`` (to replay past reconfiguration</span>
+<span class="sd">        events when the simulation starts mid-run) and during ``run``</span>
+<span class="sd">        (once per day).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            day (int): Simulation day number at which to apply changes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">day</span> <span class="o">==</span> <span class="mi">66</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">day</span> <span class="o">==</span> <span class="mi">10</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">day</span> <span class="o">==</span> <span class="mi">125</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">day</span> <span class="o">==</span> <span class="mi">188</span><span class="p">:</span>
+            <span class="c1">#            self.riskiness = get_riskiness(0.6, 0.4, 0.1)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.05</span><span class="p">)</span>
+           <span class="c1"># self.riskiness = get_riskiness(0, 0, 0)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+        <span class="c1"># if day == 300:</span>
+        <span class="c1">#     self.riskiness = get_riskiness(0.0, 0.0, 0.0)</span>
+        <span class="c1">#     self.auto_recover = True</span>
+
+        <span class="c1"># if day == 311:</span>
+        <span class="c1">#     self.riskiness = get_riskiness(0.0, 0.0, 0.0)</span>
+        <span class="c1">#     self.auto_recover = True</span>
+
+<div class="viewcode-block" id="CRLikePolicy.run">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.CRLikePolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step, applying any scheduled reconfiguration first.</span>
+
+<span class="sd">        Calls :meth:`reconfig` for the current simulation day and then</span>
+<span class="sd">        delegates to the parent :meth:`ContactTracingPolicy.run`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># if self.model.T == 218:</span>
+        <span class="c1">#     self.riskiness = get_riskiness(0.8, 0.4, 0.2)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reconfig</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span></div>
+</div>
+
+
+
+<span class="c1"># do not use these classes (abandoned), use config file</span>
+<div class="viewcode-block" id="StrongEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.StrongEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">StrongEvaQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with maximum riskiness for all layers.</span>
+
+<span class="sd">    Abandoned variant; prefer using a config file instead.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">RISK_FOR_LAYERS_MAX</span></div>
+
+
+
+<div class="viewcode-block" id="NoEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.NoEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">NoEvaQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with zero riskiness (no contacts traced).</span>
+
+<span class="sd">    Abandoned variant; prefer using a config file instead.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="MiniEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.MiniEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">MiniEvaQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with minimal riskiness (family contacts only).</span>
+
+<span class="sd">    Abandoned variant; prefer using a config file instead.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">RISK_FOR_LAYERS_MINI</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2AQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.Exp2AQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2AQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant A: full riskiness for family, school/work, and leisure.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2BQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.Exp2BQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2BQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant B: full riskiness for family and school/work only.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2CQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.Exp2CQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2CQuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant C: full riskiness for family contacts only.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W10QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W10QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W10QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 10 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W20QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W20QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W20QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 20 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W30QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W30QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W30QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 30 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W40QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W40QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W40QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 40 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W60QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W60QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W60QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 60 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W80QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#contact_tracing.W80QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W80QuarantinePolicy</span><span class="p">(</span><span class="n">ContactTracingPolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Contact-tracing policy with uniform 80 % riskiness across all groups.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_riskiness</span><span class="p">(</span><span class="n">contact</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">riskiness</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the riskiness value for a given contact edge.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        contact: Edge identifier (used to look up the layer).</span>
+<span class="sd">        graph: The contact network graph object with a</span>
+<span class="sd">            ``get_layer_for_edge`` method.</span>
+<span class="sd">        riskiness (numpy.ndarray): Per-layer riskiness array.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Riskiness value for the layer of the given contact edge.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#    print(f&quot;DBG riskiness {graph.e_types[contact]}:{riskiness[graph.get_layer_for_edge(contact)]}&quot;)</span>
+    <span class="k">return</span> <span class="n">riskiness</span><span class="p">[</span><span class="n">graph</span><span class="o">.</span><span class="n">get_layer_for_edge</span><span class="p">(</span><span class="n">contact</span><span class="p">)]</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

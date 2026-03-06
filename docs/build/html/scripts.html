@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Scripts &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="_static/haiku.css?v=e491ac2d" />
+    <script src="_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="_static/doctools.js?v=888ff710"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Source Modules" href="src_modules.html" />
+    <link rel="prev" title="MAIS Documentation" href="index.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>Scripts</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        «&#160;&#160;<a href="index.html">MAIS Documentation</a>
+        &#160;&#160;::&#160;&#160;
+        <a class="uplink" href="index.html">Contents</a>
+        &#160;&#160;::&#160;&#160;
+        <a href="src_modules.html">Source Modules</a>&#160;&#160;»
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <section id="scripts">
+<h1>Scripts<a class="headerlink" href="#scripts" title="Link to this heading">¶</a></h1>
+<section id="scripts-top-level">
+<h2>scripts (top level)<a class="headerlink" href="#scripts-top-level" title="Link to this heading">¶</a></h2>
+<section id="module-animate">
+<span id="animate"></span><h3><code class="docutils literal notranslate"><span class="pre">animate</span></code><a class="headerlink" href="#module-animate" title="Link to this heading">¶</a></h3>
+<p>Interactive animation of per-node epidemic states using graph-tool.</p>
+<p>This script visualises a pre-computed node-state time-series (produced by
+enabling <code class="docutils literal notranslate"><span class="pre">save_node_states</span></code> in a simulation run) as an animated graph
+rendered with <code class="docutils literal notranslate"><span class="pre">graph-tool</span></code> and <code class="docutils literal notranslate"><span class="pre">GTK</span></code>.</p>
+<p>Each node is rendered as a gender-specific icon (lady / man); nodes that
+are in an infectious state are highlighted with a red halo.  Nodes that die
+are replaced with a zombie icon.  The animation advances one day every two
+seconds.</p>
+<p>Requires <code class="docutils literal notranslate"><span class="pre">graph-tool</span></code>, <code class="docutils literal notranslate"><span class="pre">cairo</span></code>, and the GTK bindings to be installed.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">animate</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span> <span class="o">--</span><span class="n">nodes_file</span> <span class="o">../</span><span class="n">data</span><span class="o">/</span><span class="n">output</span><span class="o">/</span><span class="n">model</span><span class="o">/</span><span class="n">node_states</span><span class="o">.</span><span class="n">csv</span>
+</pre></div>
+</div>
+</section>
+<section id="module-plot_experiments">
+<span id="plot-experiments"></span><h3><code class="docutils literal notranslate"><span class="pre">plot_experiments</span></code><a class="headerlink" href="#module-plot_experiments" title="Link to this heading">¶</a></h3>
+<p>Command-line script for plotting MAIS simulation results.</p>
+<p>Reads one or more simulation result files (<code class="docutils literal notranslate"><span class="pre">.csv</span></code>, <code class="docutils literal notranslate"><span class="pre">.zip</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">.feather</span></code>), computes aggregate statistics (median/mean with IQR or SD
+shading), and saves the resulting plot.  An optional fit/observed-data curve
+can be overlaid.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">plot_experiments</span><span class="o">.</span><span class="n">py</span> <span class="n">results_a</span><span class="o">.</span><span class="n">zip</span> <span class="n">results_b</span><span class="o">.</span><span class="n">zip</span> \
+    <span class="o">--</span><span class="n">column</span> <span class="n">I_d</span> <span class="o">--</span><span class="n">out_file</span> <span class="n">plot</span><span class="o">.</span><span class="n">png</span> <span class="o">--</span><span class="n">label_names</span> <span class="s2">&quot;Scenario A,Scenario B&quot;</span>
+</pre></div>
+</div>
+<dl class="py function">
+<dt class="sig sig-object py" id="plot_experiments.process_zip">
+<span class="sig-prename descclassname"><span class="pre">plot_experiments.</span></span><span class="sig-name descname"><span class="pre">process_zip</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">zip_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">save_feather</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/plot_experiments.html#process_zip"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#plot_experiments.process_zip" title="Link to this definition">¶</a></dt>
+<dd><p>Extract all CSVs from a ZIP archive and concatenate them into one DataFrame.</p>
+<p>Creates a temporary directory next to the ZIP file, extracts all
+<code class="docutils literal notranslate"><span class="pre">*.csv</span></code> entries, reads them (ignoring comment lines starting with
+<code class="docutils literal notranslate"><span class="pre">#</span></code>), adds an <code class="docutils literal notranslate"><span class="pre">&quot;id&quot;</span></code> column to each, and concatenates the results.
+The temporary directory is removed in a <code class="docutils literal notranslate"><span class="pre">finally</span></code> block regardless of
+errors.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>zip_path</strong> (<em>str</em>) – Path to the <code class="docutils literal notranslate"><span class="pre">.zip</span></code> archive produced by
+<code class="docutils literal notranslate"><span class="pre">run_multi_experiment.py</span></code>.</p></li>
+<li><p><strong>save_feather</strong> (<em>bool</em>) – If <code class="docutils literal notranslate"><span class="pre">True</span></code>, the concatenated DataFrame is also
+saved as a <code class="docutils literal notranslate"><span class="pre">.feather</span></code> file with the same base name as the ZIP.
+Defaults to <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Concatenated DataFrame with all replicate results
+and an <code class="docutils literal notranslate"><span class="pre">&quot;id&quot;</span></code> column identifying each source file.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>pandas.DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="plot_experiments.plot_dfs">
+<span class="sig-prename descclassname"><span class="pre">plot_experiments.</span></span><span class="sig-name descname"><span class="pre">plot_dfs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dfs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">figsize</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xlabel</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ylabel</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">labels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">title</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ymax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_median</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_sd</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fit_me</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">show_whole_fit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">day_indices</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">day_labels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/plot_experiments.html#plot_dfs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#plot_experiments.plot_dfs" title="Link to this definition">¶</a></dt>
+<dd><p>Create and save a multi-series line plot from a list of DataFrames.</p>
+<p>Each DataFrame in <code class="docutils literal notranslate"><span class="pre">dfs</span></code> is plotted as one line with an uncertainty band
+(IQR or SD).  An optional fit/observed data curve can be overlaid.
+Axis limits are inferred from the data unless overridden.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dfs</strong> (<em>list</em><em>[</em><em>pandas.DataFrame</em><em>]</em>) – List of result DataFrames, each
+containing at minimum a <code class="docutils literal notranslate"><span class="pre">&quot;T&quot;</span></code> column and the column named by
+<code class="docutils literal notranslate"><span class="pre">column</span></code>.</p></li>
+<li><p><strong>column</strong> (<em>str</em>) – Name of the y-axis column to plot.</p></li>
+<li><p><strong>figsize</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Figure size <code class="docutils literal notranslate"><span class="pre">(width,</span> <span class="pre">height)</span></code> in inches.</p></li>
+<li><p><strong>out_path</strong> (<em>str</em>) – File path where the plot image is saved.</p></li>
+<li><p><strong>xlabel</strong> (<em>str</em>) – Label for the x-axis.</p></li>
+<li><p><strong>ylabel</strong> (<em>str</em>) – Label for the y-axis.</p></li>
+<li><p><strong>labels</strong> (<em>list</em><em>[</em><em>str</em><em>] or </em><em>None</em>) – Legend labels, one per DataFrame in
+<code class="docutils literal notranslate"><span class="pre">dfs</span></code>.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code> (no legend).</p></li>
+<li><p><strong>title</strong> (<em>str</em><em> or </em><em>None</em>) – Plot title.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>ymax</strong> (<em>int</em><em> or </em><em>None</em>) – Upper limit of the y-axis.  Inferred from data
+if <code class="docutils literal notranslate"><span class="pre">None</span></code>.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>use_median</strong> (<em>bool</em>) – Use median as the central estimator when
+<code class="docutils literal notranslate"><span class="pre">True</span></code>; use mean otherwise.  Defaults to <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p></li>
+<li><p><strong>use_sd</strong> (<em>bool</em>) – Use standard-deviation shading when <code class="docutils literal notranslate"><span class="pre">True</span></code>; use
+interquartile-range shading otherwise.  Defaults to <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+<li><p><strong>fit_me</strong> (<em>pandas.DataFrame</em><em> or </em><em>None</em>) – Optional DataFrame with columns
+<code class="docutils literal notranslate"><span class="pre">&quot;T&quot;</span></code> and <code class="docutils literal notranslate"><span class="pre">column</span></code> representing observed/fit data to overlay
+as an unshaded line.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>show_whole_fit</strong> (<em>bool</em>) – If <code class="docutils literal notranslate"><span class="pre">True</span></code>, include <code class="docutils literal notranslate"><span class="pre">fit_me</span></code> in the x-axis
+range calculation.  Defaults to <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+<li><p><strong>day_indices</strong> (<em>list</em><em>[</em><em>int</em><em>] or </em><em>None</em>) – Positions along the x-axis at which
+to place custom tick marks.  Must be combined with
+<code class="docutils literal notranslate"><span class="pre">day_labels</span></code>.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>day_labels</strong> (<em>list</em><em>[</em><em>str</em><em>] or </em><em>None</em>) – String labels for the ticks at
+<code class="docutils literal notranslate"><span class="pre">day_indices</span></code>.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-preload_graph">
+<span id="preload-graph"></span><h3><code class="docutils literal notranslate"><span class="pre">preload_graph</span></code><a class="headerlink" href="#module-preload_graph" title="Link to this heading">¶</a></h3>
+<p>Command-line script for pre-loading and pickling a contact-network graph.</p>
+<p>This script reads a model configuration file, constructs the graph described
+in the <code class="docutils literal notranslate"><span class="pre">[GRAPH]</span></code> section, and saves it as a pickle file at the path given
+by the <code class="docutils literal notranslate"><span class="pre">file</span></code> key in <code class="docutils literal notranslate"><span class="pre">[GRAPH]</span></code>.  On subsequent runs, <code class="docutils literal notranslate"><span class="pre">load_graph</span></code>
+automatically detects the pickle file and skips the (potentially expensive)
+CSV parsing step.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">preload_graph</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span>
+</pre></div>
+</div>
+</section>
+<section id="module-run_experiment">
+<span id="run-experiment"></span><h3><code class="docutils literal notranslate"><span class="pre">run_experiment</span></code><a class="headerlink" href="#module-run_experiment" title="Link to this heading">¶</a></h3>
+<p>Command-line script for running a single MAIS epidemic simulation.</p>
+<p>This script loads a model configuration from an INI file (or a set of
+configurations generated by <code class="docutils literal notranslate"><span class="pre">ConfigFileGenerator</span></code>), runs the simulation one
+or more times, and writes the per-day state history to CSV files.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">run_experiment</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span> <span class="n">my_run_id</span> <span class="o">--</span><span class="n">n_repeat</span> <span class="mi">5</span> <span class="o">-</span><span class="n">R</span> <span class="mi">12345</span>
+</pre></div>
+</div>
+<p>Output files are written to the directory specified by <code class="docutils literal notranslate"><span class="pre">output_dir</span></code> in the
+config’s <code class="docutils literal notranslate"><span class="pre">[TASK]</span></code> section (or the current working directory if not set).
+Each repetition produces <code class="docutils literal notranslate"><span class="pre">history_&lt;test_id&gt;_&lt;i&gt;.csv</span></code> (or <code class="docutils literal notranslate"><span class="pre">history.csv</span></code>
+for a single run).  Optionally, per-node state histories are saved as
+<code class="docutils literal notranslate"><span class="pre">node_states_&lt;test_id&gt;.csv</span></code>.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="run_experiment.demo">
+<span class="sig-prename descclassname"><span class="pre">run_experiment.</span></span><span class="sig-name descname"><span class="pre">demo</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cf</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">test_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_random_seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">42</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">print_interval</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_repeat</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/run_experiment.html#demo"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#run_experiment.demo" title="Link to this definition">¶</a></dt>
+<dd><p>Load, run, and save an epidemic model from a config file.</p>
+<p>Builds a <code class="docutils literal notranslate"><span class="pre">ModelM</span></code> from <code class="docutils literal notranslate"><span class="pre">cf</span></code>, runs it <code class="docutils literal notranslate"><span class="pre">n_repeat</span></code> times (resetting
+between repetitions), and writes the history CSV for each run.  If the
+config enables <code class="docutils literal notranslate"><span class="pre">save_node_states</span></code>, per-node state files are written as
+well.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cf</strong> (<a class="reference internal" href="src_modules.html#config_utils.ConfigFile" title="config_utils.ConfigFile"><em>ConfigFile</em></a>) – Loaded configuration object describing the experiment.</p></li>
+<li><p><strong>test_id</strong> (<em>str</em><em> or </em><em>None</em>) – Tag appended to output file names.  Defaults to
+<code class="docutils literal notranslate"><span class="pre">None</span></code> (no tag).</p></li>
+<li><p><strong>model_random_seed</strong> (<em>int</em>) – Random seed for the first run.  Subsequent
+runs use the same seed (the model is reset, not re-seeded, between
+repetitions unless a different seed is set explicitly).  Defaults
+to <code class="docutils literal notranslate"><span class="pre">42</span></code>.</p></li>
+<li><p><strong>print_interval</strong> (<em>int</em>) – How often (in simulated days) to print a progress
+summary.  Defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+<li><p><strong>n_repeat</strong> (<em>int</em>) – Number of independent repetitions to execute.
+Defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-run_multi_experiment">
+<span id="run-multi-experiment"></span><h3><code class="docutils literal notranslate"><span class="pre">run_multi_experiment</span></code><a class="headerlink" href="#module-run_multi_experiment" title="Link to this heading">¶</a></h3>
+<p>Command-line script for running many parallel MAIS epidemic simulations.</p>
+<p>This script is the parallel, multi-repetition counterpart of
+<code class="docutils literal notranslate"><span class="pre">run_experiment.py</span></code>.  It uses a <code class="docutils literal notranslate"><span class="pre">Pool</span></code> of worker processes to run
+<code class="docutils literal notranslate"><span class="pre">n_repeat</span></code> independent stochastic replicates of the same model and writes
+the results either into a single <code class="docutils literal notranslate"><span class="pre">.zip</span></code> archive (one CSV per replicate,
+default) or into a combined <code class="docutils literal notranslate"><span class="pre">.feather</span></code> file.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">run_multi_experiment</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span> <span class="n">my_run</span> <span class="o">--</span><span class="n">n_repeat</span> <span class="mi">100</span> <span class="o">--</span><span class="n">n_jobs</span> <span class="mi">8</span>
+</pre></div>
+</div>
+<p>Output files are written to the directory specified by <code class="docutils literal notranslate"><span class="pre">output_dir</span></code> in the
+config’s <code class="docutils literal notranslate"><span class="pre">[TASK]</span></code> section.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="run_multi_experiment.evaluate_model">
+<span class="sig-prename descclassname"><span class="pre">run_multi_experiment.</span></span><span class="sig-name descname"><span class="pre">evaluate_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setup</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/run_multi_experiment.html#evaluate_model"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#run_multi_experiment.evaluate_model" title="Link to this definition">¶</a></dt>
+<dd><p>Run one replicate of the model and return its results.</p>
+<p>This function is designed to be called by a worker process inside
+<code class="docutils literal notranslate"><span class="pre">utils.pool.Pool</span></code>.  It resets the model to a new random seed, runs
+the simulation, and returns the resulting DataFrame alongside bookkeeping
+information.</p>
+<p>On <code class="docutils literal notranslate"><span class="pre">AssertionError</span></code>, the failure is logged to a <code class="docutils literal notranslate"><span class="pre">.FAILED</span></code> file and
+<code class="docutils literal notranslate"><span class="pre">(idx,</span> <span class="pre">None,</span> <span class="pre">None,</span> <span class="pre">None,</span> <span class="pre">None)</span></code> is returned so the pool can continue.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model</strong> (<em>ModelM</em>) – The model instance assigned to this worker.</p></li>
+<li><p><strong>setup</strong> (<em>tuple</em>) – <p>A five-element tuple
+<code class="docutils literal notranslate"><span class="pre">(idx,</span> <span class="pre">random_seed,</span> <span class="pre">test_id,</span> <span class="pre">config,</span> <span class="pre">args)</span></code> where</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">idx</span></code> (int) – worker index used to route answers back to the
+pool.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">random_seed</span></code> (int or None) – seed to pass to <code class="docutils literal notranslate"><span class="pre">model.reset</span></code>.
+<code class="docutils literal notranslate"><span class="pre">None</span></code> means the seed is unchanged.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">test_id</span></code> (str) – tag appended to output file names.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">config</span></code> (ConfigFile) – configuration object (used only for
+error reporting).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">args</span></code> (tuple) – <code class="docutils literal notranslate"><span class="pre">(ndays,</span> <span class="pre">print_interval,</span> <span class="pre">verbose)</span></code> run
+parameters.</p></li>
+</ul>
+</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><p><code class="docutils literal notranslate"><span class="pre">(idx,</span> <span class="pre">df,</span> <span class="pre">deads,</span> <span class="pre">random_seed,</span> <span class="pre">suffix)</span></code> where</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">idx</span></code> (int) – worker index.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">df</span></code> (pandas.DataFrame or None) – per-day state history with an
+added <code class="docutils literal notranslate"><span class="pre">&quot;id&quot;</span></code> column.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">deads</span></code> – always <code class="docutils literal notranslate"><span class="pre">None</span></code> in the current implementation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">random_seed</span></code> (int) – actual seed used by the model.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">suffix</span></code> (str) – file-name suffix derived from <code class="docutils literal notranslate"><span class="pre">test_id</span></code>.</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="run_multi_experiment.demo">
+<span class="sig-prename descclassname"><span class="pre">run_multi_experiment.</span></span><span class="sig-name descname"><span class="pre">demo</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cf</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">test_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_random_seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">42</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">print_interval</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_repeat</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_jobs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'ZIP'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/run_multi_experiment.html#demo"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#run_multi_experiment.demo" title="Link to this definition">¶</a></dt>
+<dd><p>Run many parallel epidemic model replicates and aggregate their output.</p>
+<p>Loads the graph once, creates <code class="docutils literal notranslate"><span class="pre">n_jobs</span></code> duplicates of the model, and
+feeds tasks into a <code class="docutils literal notranslate"><span class="pre">Pool</span></code>.  Results arrive asynchronously and are written
+to disk on the fly (ZIP mode) or collected in memory and written at the
+end (FEATHER mode).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cf</strong> (<a class="reference internal" href="src_modules.html#config_utils.ConfigFile" title="config_utils.ConfigFile"><em>ConfigFile</em></a>) – Loaded configuration object describing the experiment.</p></li>
+<li><p><strong>test_id</strong> (<em>str</em><em> or </em><em>None</em>) – Tag appended to output file and archive names.
+Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code> (no tag).</p></li>
+<li><p><strong>model_random_seed</strong> (<em>int</em><em> or </em><em>list</em><em>[</em><em>int</em><em>]</em>) – Base seed (or explicit list of
+seeds for each replicate).  When an integer, seeds for replicates
+<code class="docutils literal notranslate"><span class="pre">i</span></code> are <code class="docutils literal notranslate"><span class="pre">model_random_seed</span> <span class="pre">+</span> <span class="pre">i</span></code>.  Defaults to <code class="docutils literal notranslate"><span class="pre">42</span></code>.</p></li>
+<li><p><strong>print_interval</strong> (<em>int</em>) – Simulated-day interval for progress output.
+Defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+<li><p><strong>n_repeat</strong> (<em>int</em>) – Total number of replicates to run.  Defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+<li><p><strong>n_jobs</strong> (<em>int</em>) – Number of parallel worker processes.  Defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+<li><p><strong>output_type</strong> (<em>str</em>) – Output format – <code class="docutils literal notranslate"><span class="pre">&quot;ZIP&quot;</span></code> (default) saves each
+replicate as a separate CSV inside a zip archive; <code class="docutils literal notranslate"><span class="pre">&quot;FEATHER&quot;</span></code>
+concatenates all results into a single feather file.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">output_type</span></code> is not <code class="docutils literal notranslate"><span class="pre">&quot;ZIP&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;FEATHER&quot;</span></code>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="run_multi_experiment.save_to_zipped_csv">
+<span class="sig-prename descclassname"><span class="pre">run_multi_experiment.</span></span><span class="sig-name descname"><span class="pre">save_to_zipped_csv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">test_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">suffix</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zipname</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/run_multi_experiment.html#save_to_zipped_csv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#run_multi_experiment.save_to_zipped_csv" title="Link to this definition">¶</a></dt>
+<dd><p>Append a single replicate’s result DataFrame to a shared ZIP archive.</p>
+<p>The CSV content is preceded by the configuration file text (each line
+prefixed with <code class="docutils literal notranslate"><span class="pre">#</span></code>) and the random seed, matching the single-run CSV
+format produced by <code class="docutils literal notranslate"><span class="pre">run_experiment.py</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>test_id</strong> (<em>str</em>) – Experiment tag (used only for internal bookkeeping;
+the file name is derived from <code class="docutils literal notranslate"><span class="pre">suffix</span></code>).</p></li>
+<li><p><strong>idx</strong> (<em>int</em>) – Replicate index (unused in the current implementation;
+reserved for future use).</p></li>
+<li><p><strong>df</strong> (<em>pandas.DataFrame</em>) – Per-day simulation results to write.</p></li>
+<li><p><strong>config</strong> (<a class="reference internal" href="src_modules.html#config_utils.ConfigFile" title="config_utils.ConfigFile"><em>ConfigFile</em></a>) – Configuration object whose string representation
+is prepended as comments.</p></li>
+<li><p><strong>random_seed</strong> (<em>int</em>) – Actual random seed used for this replicate.</p></li>
+<li><p><strong>suffix</strong> (<em>str</em>) – File-name suffix that forms part of the entry name
+inside the archive (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;_my_run_3&quot;</span></code>).</p></li>
+<li><p><strong>zipname</strong> (<em>str</em>) – Path to the ZIP archive to append to.  The archive
+must already exist (created by the caller).</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-run_search">
+<span id="run-search"></span><h3><code class="docutils literal notranslate"><span class="pre">run_search</span></code><a class="headerlink" href="#module-run_search" title="Link to this heading">¶</a></h3>
+<p>Command-line script for hyperparameter search on MAIS epidemic models.</p>
+<p>Loads a model configuration and a hyperparameter search configuration (JSON),
+then runs the selected search method (grid search or CMA-ES) to minimise a
+specified loss function (RMSE, MAE, or R²) against observed gold data.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">run_search</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span> <span class="n">gridsearch</span><span class="o">.</span><span class="n">json</span> \
+    <span class="o">--</span><span class="n">fit_data</span> <span class="o">../</span><span class="n">data</span><span class="o">/</span><span class="n">fit_data</span><span class="o">/</span><span class="n">fit_me</span><span class="o">.</span><span class="n">csv</span> \
+    <span class="o">--</span><span class="n">return_func</span> <span class="n">rmse</span> <span class="o">--</span><span class="n">n_jobs</span> <span class="mi">4</span>
+</pre></div>
+</div>
+<p>Results are saved as a CSV file in the directory specified by <code class="docutils literal notranslate"><span class="pre">--out_dir</span></code>.
+An optional evolution log can be written with <code class="docutils literal notranslate"><span class="pre">-l</span></code>.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="run_search.load_gold_data">
+<span class="sig-prename descclassname"><span class="pre">run_search.</span></span><span class="sig-name descname"><span class="pre">load_gold_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">csv_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">first_n_zeros</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_column</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">from_day</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">until_day</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_dates</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/run_search.html#load_gold_data"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#run_search.load_gold_data" title="Link to this definition">¶</a></dt>
+<dd><p>Load and pre-process observed (gold) data for model fitting.</p>
+<p>Reads a CSV file, aligns its time index, optionally pads the beginning
+with zero-valued rows, and returns a DataFrame with <code class="docutils literal notranslate"><span class="pre">&quot;day&quot;</span></code> and
+<code class="docutils literal notranslate"><span class="pre">&quot;infected&quot;</span></code> columns sliced to the requested day range.</p>
+<p>Forward-fill is applied to handle any missing values in the data column.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>csv_path</strong> (<em>str</em>) – Path to the CSV file containing observed data.  The
+file must have either a <code class="docutils literal notranslate"><span class="pre">&quot;datum&quot;</span></code> column (parsed as dates when
+<code class="docutils literal notranslate"><span class="pre">use_dates=True</span></code>) or a <code class="docutils literal notranslate"><span class="pre">&quot;T&quot;</span></code> column with day indices.</p></li>
+<li><p><strong>first_n_zeros</strong> (<em>int</em>) – Number of zero-valued days to prepend.  The
+existing day indices are shifted by this value.  Defaults to <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p></li>
+<li><p><strong>data_column</strong> (<em>int</em><em> or </em><em>str</em>) – Either the integer column position (0-based)
+or the string column name of the observed values.  Defaults to
+<code class="docutils literal notranslate"><span class="pre">2</span></code>.</p></li>
+<li><p><strong>from_day</strong> (<em>int</em>) – First row index (0-based) to include after all
+pre-processing.  Defaults to <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p></li>
+<li><p><strong>until_day</strong> (<em>int</em><em> or </em><em>None</em>) – Exclusive upper row index.  <code class="docutils literal notranslate"><span class="pre">None</span></code> means
+include all remaining rows.  Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>use_dates</strong> (<em>bool</em>) – If <code class="docutils literal notranslate"><span class="pre">True</span></code>, derive day indices from the <code class="docutils literal notranslate"><span class="pre">&quot;datum&quot;</span></code>
+column (parsed as dates, with day 0 = the first date).  Otherwise
+use the <code class="docutils literal notranslate"><span class="pre">&quot;T&quot;</span></code> column.  Defaults to <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>DataFrame with columns <code class="docutils literal notranslate"><span class="pre">&quot;day&quot;</span></code> (int) and
+<code class="docutils literal notranslate"><span class="pre">&quot;infected&quot;</span></code> (float), sliced to <code class="docutils literal notranslate"><span class="pre">[from_day,</span> <span class="pre">until_day)</span></code>.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>pandas.DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+</section>
+
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        «&#160;&#160;<a href="index.html">MAIS Documentation</a>
+        &#160;&#160;::&#160;&#160;
+        <a class="uplink" href="index.html">Contents</a>
+        &#160;&#160;::&#160;&#160;
+        <a href="src_modules.html">Source Modules</a>&#160;&#160;»
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

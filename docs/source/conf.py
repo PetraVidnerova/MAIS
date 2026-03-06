@@ -1,0 +1,63 @@
+import os
+import sys
+
+# Recursively add all directories containing .py files to sys.path.
+# This is needed because src/ contains loose .py files in nested subdirectories
+# (no __init__.py), so each directory must be on the path individually.
+project_root = os.path.abspath('../..')
+
+for search_dir in ['src', 'scripts']:
+    base = os.path.join(project_root, search_dir)
+    if os.path.exists(base):
+        sys.path.insert(0, base)
+        for dirpath, dirnames, filenames in os.walk(base):
+            if any(f.endswith('.py') for f in filenames):
+                dirname = os.path.basename(dirpath)
+                # Skip subdirectories that contain a .py file matching the
+                # directory name (e.g. src/model_m/ has model_m.py).
+                # Adding such a path would shadow the parent-level namespace
+                # package, breaking imports like `from model_m.model_m import`.
+                if (dirname + '.py') in filenames:
+                    continue
+                sys.path.append(dirpath)
+
+# -- Project information -----------------------------------------------------
+project = 'MAIS'
+copyright = '2026, MAIS Team'
+author = 'MAIS Team'
+
+# -- General configuration ---------------------------------------------------
+extensions = [
+    'sphinx.ext.autodoc',       # Pull docs from docstrings
+    'sphinx.ext.napoleon',      # Support Google-style docstrings
+    'sphinx.ext.viewcode',      # Add links to source code
+    'sphinx.ext.intersphinx',   # Link to other projects' docs
+]
+
+# Napoleon settings (Google-style docstrings)
+napoleon_google_docstring = True
+napoleon_numpy_docstring = False
+napoleon_include_init_with_doc = True
+napoleon_include_private_with_doc = False
+napoleon_include_special_with_doc = True
+
+# Autodoc settings
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': True,
+    'show-inheritance': True,
+}
+autodoc_member_order = 'bysource'
+
+# Mock imports for dependencies that may not be installed.
+# Add any external libraries your code imports here, e.g.:
+# autodoc_mock_imports = ['numpy', 'pandas', 'torch']
+autodoc_mock_imports = ['pandas', 'networkx', 'seaborn', 'matplotlib', 'sklearn', 'cma', 'scipy', 'numpy_indexed', 'graph_tool',
+                        'numexpr', 'tqdm', 'numpy', 'csv_graph', 'light_graph']
+
+templates_path = ['_templates']
+exclude_patterns = []
+
+# -- Options for HTML output -------------------------------------------------
+html_theme = 'haiku'
+html_static_path = ['_static']

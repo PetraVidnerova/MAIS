@@ -12,11 +12,11 @@ planned for future use.
 
 Classes:
     GraphGenerator: Base class wrapping a NetworkX MultiGraph with
-        layer-aware helper methods.
+    layer-aware helper methods.
     RandomSingleGraphGenerator: Generates a single-layer Barabasi-Albert
-        graph with exponentially trimmed degree distribution.
+    graph with exponentially trimmed degree distribution.
     RandomGraphGenerator: Generates one Barabasi-Albert graph per layer
-        with random truncated-normal edge weights.
+    with random truncated-normal edge weights.
     PickleGraphGenerator: Restores a graph from a NetworkX pickle file.
     CSVGraphGenerator: Builds a graph from nodes, edges and layer CSV files.
 """

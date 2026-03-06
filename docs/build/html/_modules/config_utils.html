@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>config_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>config_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for config_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Configuration file utilities for the MAIS simulation.</span>
+
+<span class="sd">This module provides classes and helpers for reading, writing, and generating</span>
+<span class="sd">INI-style configuration files used to parameterise simulation runs.</span>
+
+<span class="sd">Key components:</span>
+
+<span class="sd">- :func:`string_to_value`: Type-coercing string parser used when reading</span>
+<span class="sd">  INI values.</span>
+<span class="sd">- :class:`ConfigFile`: Thin wrapper around :class:`configparser.ConfigParser`</span>
+<span class="sd">  for loading, saving, and querying individual INI files.</span>
+<span class="sd">- :class:`ConfigFileGenerator`: Expands a template INI file containing</span>
+<span class="sd">  semicolon-separated parameter lists into a stream of fully-specified</span>
+<span class="sd">  :class:`ConfigFile` instances, one per parameter combination.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">configparser</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">io</span>
+
+<span class="kn">from</span> <span class="nn">sklearn.model_selection</span> <span class="kn">import</span> <span class="n">ParameterGrid</span>
+
+<div class="viewcode-block" id="string_to_value">
+<a class="viewcode-back" href="../src_modules.html#config_utils.string_to_value">[docs]</a>
+<span class="k">def</span> <span class="nf">string_to_value</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert a raw INI string value to the most appropriate Python type.</span>
+
+<span class="sd">    Tries type conversions in the following order:</span>
+
+<span class="sd">    1. ``int`` – if the entire string represents an integer.</span>
+<span class="sd">    2. ``float`` – if the entire string represents a floating-point number.</span>
+<span class="sd">    3. ``list`` – if the string contains a comma; it is split on commas and</span>
+<span class="sd">       each token is stripped of surrounding whitespace.</span>
+<span class="sd">    4. ``str`` – the original string is returned unchanged.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        s (str): Raw string value read from a configuration file.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        int or float or list of str or str: The converted value.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="k">pass</span>
+
+    <span class="k">if</span> <span class="s2">&quot;,&quot;</span> <span class="ow">in</span> <span class="n">s</span><span class="p">:</span>
+        <span class="n">list_of_values</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">val</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="k">for</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">list_of_values</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">s</span></div>
+
+
+
+
+<div class="viewcode-block" id="ConfigFile">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile">[docs]</a>
+<span class="k">class</span> <span class="nc">ConfigFile</span><span class="p">():</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wrapper around :class:`configparser.ConfigParser` for INI-style config files.</span>
+
+<span class="sd">    Provides convenience methods for loading from and saving to ``.ini``</span>
+<span class="sd">    files, serialising to a string, and reading sections as type-converted</span>
+<span class="sd">    dictionaries. Key-case is preserved (``optionxform = str``).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        param_dict (dict, optional): If provided, a mapping of</span>
+<span class="sd">            ``{section_name: {key: value}}`` pairs used to pre-populate</span>
+<span class="sd">            the underlying :class:`configparser.ConfigParser`. Defaults to</span>
+<span class="sd">            ``None`` (empty configuration).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_dict</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">configparser</span><span class="o">.</span><span class="n">ConfigParser</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">optionxform</span> <span class="o">=</span> <span class="nb">str</span>
+        <span class="k">if</span> <span class="n">param_dict</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">param_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+
+<div class="viewcode-block" id="ConfigFile.save">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile.save">[docs]</a>
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Write the configuration to a file or file-like object.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str or file-like): If a string, the configuration is</span>
+<span class="sd">                written to that file path (UTF-8 encoded). Otherwise the</span>
+<span class="sd">                object is treated as a writable file-like and</span>
+<span class="sd">                ``config.write()`` is called on it directly.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span> <span class="o">==</span> <span class="nb">str</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">configfile</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">configfile</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ConfigFile.to_string">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile.to_string">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_string</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Serialise the configuration to an INI-formatted string.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            str: The full INI representation of the configuration, equivalent</span>
+<span class="sd">            to what would be written by :meth:`save`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">io</span><span class="o">.</span><span class="n">StringIO</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">getvalue</span><span class="p">()</span>
+        <span class="n">output</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">ret</span></div>
+
+
+<div class="viewcode-block" id="ConfigFile.load">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile.load">[docs]</a>
+    <span class="k">def</span> <span class="nf">load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Read a configuration from an INI file.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Path to the ``.ini`` file to read.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If ``filename`` does not exist on the filesystem.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">filename</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config file </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2"> not exists. Provide name (including path) to a valid config file.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ConfigFile.section_as_dict">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile.section_as_dict">[docs]</a>
+    <span class="k">def</span> <span class="nf">section_as_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">section_name</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the contents of a section as a type-converted dictionary.</span>
+
+<span class="sd">        Each raw string value in the section is converted by</span>
+<span class="sd">        :func:`string_to_value` to the most appropriate Python type.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            section_name (str): Name of the INI section to retrieve.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            dict: Mapping of ``{key (str): value}`` for all entries in the</span>
+<span class="sd">            section, with values converted by :func:`string_to_value`. Returns</span>
+<span class="sd">            an empty dict if the section does not exist.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sdict</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">_sections</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">section_name</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="k">return</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">string_to_value</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">sdict</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span></div>
+
+
+<div class="viewcode-block" id="ConfigFile.fix_output_id">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFile.fix_output_id">[docs]</a>
+    <span class="k">def</span> <span class="nf">fix_output_id</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Resolve and replace the ``OUTPUT_ID.id`` field with a descriptive string.</span>
+
+<span class="sd">        Reads the ``id`` entry from the ``[OUTPUT_ID]`` section. If it</span>
+<span class="sd">        contains one or more ``section:key`` references (as a list or a</span>
+<span class="sd">        single string), each reference is resolved to its current value in</span>
+<span class="sd">        the configuration, and a composite identifier string of the form</span>
+<span class="sd">        ``_Section_key=value`` is constructed and stored back into</span>
+<span class="sd">        ``OUTPUT_ID.id``. Spaces in the resulting string are replaced with</span>
+<span class="sd">        underscores.</span>
+
+<span class="sd">        If ``OUTPUT_ID.id`` is not present, the method returns without making</span>
+<span class="sd">        any changes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">output_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;OUTPUT_ID&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">output_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">text_id</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">output_id</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">output_id</span> <span class="o">=</span> <span class="p">[</span><span class="n">output_id</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">variable</span> <span class="ow">in</span> <span class="n">output_id</span><span class="p">:</span>
+            <span class="n">section</span><span class="p">,</span> <span class="n">name</span> <span class="o">=</span> <span class="n">variable</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)</span>
+            <span class="n">text_id</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">section</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="n">section</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="kc">None</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">text_id</span> <span class="o">=</span> <span class="n">text_id</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;OUTPUT_ID&quot;</span><span class="p">][</span><span class="s2">&quot;id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">text_id</span></div>
+</div>
+
+
+
+
+<div class="viewcode-block" id="ConfigFileGenerator">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFileGenerator">[docs]</a>
+<span class="k">class</span> <span class="nc">ConfigFileGenerator</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generator that expands a template INI file into individual :class:`ConfigFile` instances.</span>
+
+<span class="sd">    The template INI file may contain semicolon-separated lists of values for</span>
+<span class="sd">    any key. The generator computes the Cartesian product of all such lists</span>
+<span class="sd">    (using :class:`sklearn.model_selection.ParameterGrid`) and yields one</span>
+<span class="sd">    fully-specified :class:`ConfigFile` per parameter combination.</span>
+
+<span class="sd">    After each config file is generated, :meth:`ConfigFile.fix_output_id` is</span>
+<span class="sd">    called to resolve any ``OUTPUT_ID`` references.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">configparser</span><span class="o">.</span><span class="n">ConfigParser</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">optionxform</span> <span class="o">=</span> <span class="nb">str</span> <span class="c1"># this is to keep the case of the keys in the config file</span>
+
+    <span class="k">def</span> <span class="nf">_explode_lists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">section</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Split each value in a config section on the ``&#39;;&#39;`` separator.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            section (dict): A dictionary of ``{key: raw_string_value}`` pairs</span>
+<span class="sd">                from a single INI section.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            dict: Mapping of ``{key: list of str}`` where each raw value has</span>
+<span class="sd">            been split into a list of alternative values.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="n">name</span> <span class="p">:</span> <span class="n">value</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;;&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">section</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+
+<div class="viewcode-block" id="ConfigFileGenerator.load">
+<a class="viewcode-back" href="../src_modules.html#config_utils.ConfigFileGenerator.load">[docs]</a>
+    <span class="k">def</span> <span class="nf">load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Load a template INI file and yield one :class:`ConfigFile` per parameter combination.</span>
+
+<span class="sd">        Each key that contains a ``&#39;;&#39;``-separated list of values is treated</span>
+<span class="sd">        as a parameter with multiple options. The full Cartesian product of</span>
+<span class="sd">        all such options (across all keys and sections) is enumerated, and</span>
+<span class="sd">        each combination is yielded as a separate :class:`ConfigFile`.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Path to the template ``.ini`` file. The file may</span>
+<span class="sd">                contain semicolon-separated lists of values for any key.</span>
+
+<span class="sd">        Yields:</span>
+<span class="sd">            ConfigFile: A fully-specified configuration for one parameter</span>
+<span class="sd">            combination, with ``OUTPUT_ID`` resolved via</span>
+<span class="sd">            :meth:`ConfigFile.fix_output_id`.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If ``filename`` does not exist on the filesystem.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">filename</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config file </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2"> not exists. Provide name (including path) to a valid config file.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+
+
+        <span class="n">variable_names</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">section</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">_sections</span><span class="p">[</span><span class="n">section</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+            <span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">sections</span><span class="p">()</span>
+        <span class="p">}</span>   
+
+        <span class="c1"># convert to dict </span>
+        <span class="n">param_dict</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">section</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_explode_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">_sections</span><span class="p">[</span><span class="n">section</span><span class="p">])</span>
+            <span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">sections</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="c1"># convert each section to the list of final sections</span>
+        <span class="n">param_dict</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">name</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">ParameterGrid</span><span class="p">(</span><span class="n">section</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">param_dict</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="c1"># do the outer parameter grid</span>
+        <span class="n">param_dict</span> <span class="o">=</span> <span class="n">ParameterGrid</span><span class="p">(</span><span class="n">param_dict</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">params</span> <span class="ow">in</span> <span class="n">param_dict</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">(</span><span class="n">param_dict</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+            <span class="n">x</span><span class="o">.</span><span class="n">fix_output_id</span><span class="p">()</span>
+            <span class="k">yield</span> <span class="n">x</span></div>
+</div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+
+    <span class="n">test_generator</span> <span class="o">=</span> <span class="n">ConfigFileGenerator</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">test_generator</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;../../config/info_verona.ini&quot;</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;OUTPUT_ID&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">to_string</span><span class="p">())</span>
+
+
+    <span class="n">exit</span><span class="p">()</span>
+    <span class="n">test_dict</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;TASK&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;num_nodes&quot;</span><span class="p">:</span> <span class="mi">10000</span><span class="p">},</span>
+        <span class="s2">&quot;MODEL&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;beta&quot;</span><span class="p">:</span> <span class="mf">0.155</span><span class="p">,</span>
+                  <span class="s2">&quot;gamma&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="o">/</span><span class="mf">12.39</span><span class="p">,</span>
+                  <span class="s2">&quot;sigma&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="o">/</span><span class="mf">5.2</span>
+                  <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="n">test_config</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">(</span><span class="n">test_dict</span><span class="p">)</span>
+    <span class="n">test_config</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">&quot;test.ini&quot;</span><span class="p">)</span>
+
+    <span class="n">new_config</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+    <span class="n">new_config</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;test.ini&quot;</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">new_config</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">new_config</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;MODEL&quot;</span><span class="p">))</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

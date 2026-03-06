@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wee_cold_sim &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>wee_cold_sim</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for wee_cold_sim</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Self-isolation policy for the current MAIS agent-based network model.</span>
+
+<span class="sd">This module provides :class:`WeeColdPolicy`, which causes individuals</span>
+<span class="sd">who develop symptoms (states ``I_s`` or ``S_s``) to self-isolate with</span>
+<span class="sd">a configurable probability.  Unlike the legacy :mod:`policies.wee_cold`</span>
+<span class="sd">module, this version works with the current</span>
+<span class="sd">:mod:`models.agent_based_network_model` and supports loading parameters</span>
+<span class="sd">from a configuration file.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">from</span> <span class="nn">models.agent_based_network_model</span> <span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">policies.depo</span> <span class="kn">import</span> <span class="n">Depo</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">from</span> <span class="nn">policies.quarantine_coefs</span> <span class="kn">import</span> <span class="n">QUARANTINE_COEFS</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+
+
+<span class="kn">import</span> <span class="nn">logging</span>
+
+
+<div class="viewcode-block" id="WeeColdPolicy">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">WeeColdPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Self-isolation policy for symptomatic individuals.</span>
+
+<span class="sd">    When a node newly enters a symptomatic state (``I_s`` or ``S_s``),</span>
+<span class="sd">    it self-isolates with probability ``threshold``.  The node&#39;s</span>
+<span class="sd">    contact-network edges are suppressed for ``duration`` days.  At the</span>
+<span class="sd">    end of the isolation period, nodes still symptomatic are kept for</span>
+<span class="sd">    one additional day; asymptomatic nodes are released.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.  Quarantine</span>
+<span class="sd">            coefficients are taken from ``graph.QUARANTINE_COEFS`` if</span>
+<span class="sd">            available, otherwise the module-level defaults are used.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to an INI-style configuration</span>
+<span class="sd">            file.  The ``[SELFISOLATION]`` section may contain:</span>
+
+<span class="sd">            * ``threshold`` – self-isolation probability in [0, 1]</span>
+<span class="sd">              (default 0.5).</span>
+<span class="sd">            * ``duration`` – isolation length in days (default 7).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="WeeColdPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the self-isolation policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="c1"># depo of quarantined nodes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span> <span class="o">=</span> <span class="mf">0.5</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="mi">7</span>
+
+        <span class="k">if</span> <span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Using default quarantnine coefs.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">QUARANTINE_COEFS</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">symptomatic</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># override defaults if config file provided</span>
+        <span class="k">if</span> <span class="n">config_file</span><span class="p">:</span>
+            <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+            <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+            <span class="n">my_config</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;SELFISOLATION&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span> <span class="o">=</span> <span class="n">my_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;threshold&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="n">my_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return ``None`` (no statistics collected by this policy).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.stop">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.stop">[docs]</a>
+    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop quarantining new nodes.</span>
+
+<span class="sd">        After calling ``stop``, ongoing quarantines are still managed</span>
+<span class="sd">        but no new symptomatic nodes are quarantined.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.quarantine_nodes">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.quarantine_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">quarantine_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Place detected nodes into quarantine and suppress their graph layers.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (list): Node indices to quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">modify_layers_for_nodes</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span><span class="p">,</span>
+                              <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.tick">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.tick">[docs]</a>
+    <span class="k">def</span> <span class="nf">tick</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the deposit by one day and return released nodes.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Indices of nodes released from quarantine today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">released</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.release_nodes">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.release_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">release_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">released</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore graph edges for nodes leaving quarantine.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            released (numpy.ndarray): Indices of nodes to release.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> Released nodes: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">recover_edges_for_nodes</span><span class="p">(</span><span class="n">released</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.run">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the self-isolation policy.</span>
+
+<span class="sd">        Identifies nodes that are newly symptomatic (entered ``I_s`` or</span>
+<span class="sd">        ``S_s`` for the first time today and not already in the deposit),</span>
+<span class="sd">        applies the ``threshold`` coin-flip to decide who self-isolates,</span>
+<span class="sd">        advances the deposit, and releases or extends isolation for nodes</span>
+<span class="sd">        whose period has elapsed.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">==</span> <span class="kc">True</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Hello world! This is the wee cold function speaking.  </span><span class="si">{</span><span class="s1">&#39;(STOPPED)&#39;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="o">.</span><span class="n">stopped</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;QE </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: Nodes in isolation/quarantine </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">num_of_prisoners</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># those who became symptomatic today</span>
+        <span class="n">have_symptoms</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">],</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        <span class="n">new_symptomatic</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span>
+            <span class="n">have_symptoms</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">depo</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="p">)</span>
+
+        <span class="c1"># update symptomatic</span>
+<span class="c1">#        print(&quot;symptomatic&quot;, self.symptomatic.shape)</span>
+<span class="c1">#        print(&quot;new_symptomatic&quot;, new_symptomatic.shape)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">symptomatic</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">logical_not</span><span class="p">(</span><span class="n">have_symptoms</span><span class="p">)]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">symptomatic</span><span class="p">[</span><span class="n">new_symptomatic</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="n">detected_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="n">new_symptomatic</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+
+<span class="c1">#        print(&quot;detected nodes&quot;, detected_nodes)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;GDB Wee cold: got cold </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">))</span>
+            <span class="n">responsible</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span>
+            <span class="n">detected_nodes</span> <span class="o">=</span> <span class="n">detected_nodes</span><span class="p">[</span><span class="n">responsible</span><span class="o">.</span><span class="n">ravel</span><span class="p">()]</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;GDB Wee cold: stay home </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># quarantine opens doors</span>
+        <span class="c1"># newly detected are locked up</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tick</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantine_nodes</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">still_symptomatic</span> <span class="o">=</span> <span class="n">released</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">is_I_s</span><span class="p">(</span><span class="n">released</span><span class="p">)]</span>
+            <span class="n">ready_to_leave</span> <span class="o">=</span> <span class="n">released</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">is_I_s</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">==</span> <span class="kc">False</span><span class="p">]</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">still_symptomatic</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">still_symptomatic</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">ready_to_leave</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">ready_to_leave</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="WeeColdPolicy.is_I_s">
+<a class="viewcode-back" href="../src_modules.html#wee_cold_sim.WeeColdPolicy.is_I_s">[docs]</a>
+    <span class="k">def</span> <span class="nf">is_I_s</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_ids</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Check whether nodes are currently in a symptomatic state (I_s or S_s).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_ids (numpy.ndarray): Indices of nodes to check.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array; ``True`` for nodes whose</span>
+<span class="sd">            combined membership in states ``I_s`` and ``S_s`` equals 1.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">][</span><span class="n">node_ids</span><span class="p">]</span> <span class="o">+</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">][</span><span class="n">node_ids</span><span class="p">])</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>model &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>model</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for model</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Factory for creating custom epidemic network-model classes at runtime.</span>
+
+<span class="sd">This module provides :func:`create_custom_model`, which dynamically builds a</span>
+<span class="sd">Python class that combines a user-supplied model definition (states,</span>
+<span class="sd">transitions, parameters, propensity function) with a chosen simulation engine</span>
+<span class="sd">(default: :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">models.engine_seirspluslike</span> <span class="kn">import</span> <span class="n">SeirsPlusLikeEngine</span>
+
+
+<div class="viewcode-block" id="not_implemented_yet">
+<a class="viewcode-back" href="../src_modules.html#model.not_implemented_yet">[docs]</a>
+<span class="k">def</span> <span class="nf">not_implemented_yet</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Placeholder that raises NotImplementedError.</span>
+
+<span class="sd">    Used as a sentinel default for ``calc_propensities`` when none is supplied</span>
+<span class="sd">    to :func:`create_custom_model`.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        NotImplementedError: Always.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="create_custom_model">
+<a class="viewcode-back" href="../src_modules.html#model.create_custom_model">[docs]</a>
+<span class="k">def</span> <span class="nf">create_custom_model</span><span class="p">(</span><span class="n">clsname</span><span class="p">,</span> <span class="n">states</span><span class="p">,</span> <span class="n">state_str_dict</span><span class="p">,</span> <span class="n">transitions</span><span class="p">,</span>
+                        <span class="n">final_states</span><span class="o">=</span><span class="p">[],</span> <span class="n">invisible_states</span><span class="o">=</span><span class="p">[],</span>
+                        <span class="n">unstable_states</span><span class="o">=</span><span class="p">[],</span>
+                        <span class="n">init_arguments</span><span class="o">=</span><span class="p">{},</span>
+                        <span class="n">model_parameters</span><span class="o">=</span><span class="p">{},</span>
+                        <span class="n">calc_propensities</span><span class="o">=</span><span class="n">not_implemented_yet</span><span class="p">,</span>
+                        <span class="n">member_functions</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">engine</span><span class="o">=</span><span class="n">SeirsPlusLikeEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Dynamically create an epidemic model class from a model definition.</span>
+
+<span class="sd">    Builds and returns a new Python class named *clsname* that inherits from</span>
+<span class="sd">    *engine* and is populated with the supplied model metadata, parameters, and</span>
+<span class="sd">    optional member functions.  The generated class receives an ``__init__``</span>
+<span class="sd">    that accepts the contact graph ``G`` and keyword arguments corresponding to</span>
+<span class="sd">    all declared parameters.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        clsname (str): Name of the class to create.</span>
+<span class="sd">        states (list): Ordered list of integer state codes.</span>
+<span class="sd">        state_str_dict (dict): Mapping from state code (int) to label (str).</span>
+<span class="sd">        transitions (list): List of ``(from_state, to_state)`` tuples that</span>
+<span class="sd">            describe all allowed state transitions.</span>
+<span class="sd">        final_states (list, optional): States from which no further transition</span>
+<span class="sd">            occurs (absorbing states). Defaults to ``[]``.</span>
+<span class="sd">        invisible_states (list, optional): States whose members are excluded</span>
+<span class="sd">            from the active population count (e.g. deceased). Defaults to</span>
+<span class="sd">            ``[]``.</span>
+<span class="sd">        unstable_states (list, optional): States that can still change; used</span>
+<span class="sd">            to decide when to terminate a simulation run. Defaults to ``[]``,</span>
+<span class="sd">            which is treated as *all* states.</span>
+<span class="sd">        init_arguments (dict, optional): Fixed constructor arguments as</span>
+<span class="sd">            ``{name: (default, description)}``. Defaults to ``{}``.</span>
+<span class="sd">        model_parameters (dict, optional): Per-node model parameters as</span>
+<span class="sd">            ``{name: (default, description)}``.  Values may be scalars or</span>
+<span class="sd">            arrays of length ``num_nodes``. Defaults to ``{}``.</span>
+<span class="sd">        calc_propensities (callable, optional): Function with signature</span>
+<span class="sd">            ``calc_propensities(model)`` that returns a list of per-node</span>
+<span class="sd">            propensity arrays.  Used by SEIRS-Plus-Like derived engines.</span>
+<span class="sd">            Defaults to :func:`not_implemented_yet`.</span>
+<span class="sd">        member_functions (dict, optional): Additional methods to attach to</span>
+<span class="sd">            the generated class, as ``{method_name: function}``. Defaults to</span>
+<span class="sd">            ``None``.</span>
+<span class="sd">        engine (type, optional): Base engine class.  Defaults to</span>
+<span class="sd">            :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        type: A new class inheriting from *engine* with all model metadata</span>
+<span class="sd">        set as class variables and a suitable ``__init__`` attached.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># dictionary of future class variables</span>
+    <span class="n">attributes</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;states&quot;</span><span class="p">:</span> <span class="n">states</span><span class="p">,</span>
+        <span class="s2">&quot;num_states&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">states</span><span class="p">),</span>
+        <span class="s2">&quot;state_str_dict&quot;</span><span class="p">:</span> <span class="n">state_str_dict</span><span class="p">,</span>
+        <span class="s2">&quot;transitions&quot;</span><span class="p">:</span> <span class="n">transitions</span><span class="p">,</span>
+        <span class="s2">&quot;num_transitions&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">transitions</span><span class="p">),</span>
+        <span class="s2">&quot;final_states&quot;</span><span class="p">:</span> <span class="n">final_states</span><span class="p">,</span>
+        <span class="s2">&quot;invisible_states&quot;</span><span class="p">:</span> <span class="n">invisible_states</span><span class="p">,</span>
+        <span class="s2">&quot;unstable_states&quot;</span><span class="p">:</span> <span class="n">unstable_states</span> <span class="ow">or</span> <span class="n">states</span><span class="p">,</span>
+        <span class="s2">&quot;fixed_model_parameters&quot;</span><span class="p">:</span> <span class="n">init_arguments</span><span class="p">,</span>
+        <span class="s2">&quot;model_parameters&quot;</span><span class="p">:</span> <span class="n">model_parameters</span><span class="p">,</span>
+        <span class="s2">&quot;common_arguments&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;random_seed&quot;</span><span class="p">:</span> <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;random seed value&quot;</span><span class="p">)}</span>
+    <span class="p">}</span>
+
+    <span class="k">if</span> <span class="n">calc_propensities</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">calc_propensities</span> <span class="o">=</span> <span class="n">not_implemented_yet</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1">#model_cls.calc_propensities = calc_propensities</span>
+        <span class="n">attributes</span><span class="p">[</span><span class="s2">&quot;calc_propensities&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">calc_propensities</span>
+
+    <span class="k">if</span> <span class="n">member_functions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">member_functions</span><span class="p">)</span> <span class="o">==</span> <span class="nb">dict</span>
+        <span class="n">attributes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">member_functions</span><span class="p">)</span>
+
+    <span class="n">model_cls</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="n">clsname</span><span class="p">,</span> <span class="p">(</span><span class="n">engine</span><span class="p">,),</span> <span class="n">attributes</span><span class="p">)</span>
+    <span class="n">doc_text</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;    A class to simulate the Stochastic Network Model</span>
+
+<span class="s2">    Params:</span>
+<span class="s2">            G       Network adjacency matrix (numpy array) or Networkx graph object </span><span class="se">\n</span><span class="s2">&quot;&quot;&quot;</span>
+
+    <span class="k">for</span> <span class="n">argname</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;fixed_model_parameters&quot;</span><span class="p">,</span>
+                    <span class="s2">&quot;model_parameters&quot;</span><span class="p">,</span>
+                    <span class="s2">&quot;common_arguments&quot;</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">param</span><span class="p">,</span> <span class="n">definition</span> <span class="ow">in</span> <span class="n">attributes</span><span class="p">[</span><span class="n">argname</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">param_text</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;            </span><span class="si">{</span><span class="n">param</span><span class="si">}</span><span class="s2">       </span><span class="si">{</span><span class="n">definition</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="k">if</span> <span class="n">argname</span> <span class="o">==</span> <span class="s2">&quot;model_parameters&quot;</span><span class="p">:</span>
+                <span class="n">param_text</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;            (float or np.array)</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="n">doc_text</span> <span class="o">=</span> <span class="n">doc_text</span> <span class="o">+</span> <span class="n">param_text</span>
+
+    <span class="n">model_cls</span><span class="o">.</span><span class="vm">__doc__</span> <span class="o">=</span> <span class="n">doc_text</span>
+
+    <span class="c1"># __init__ method</span>
+    <span class="k">def</span> <span class="nf">init_function</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the model on contact graph *G*.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            G: Contact network.  Accepted types: ``numpy.ndarray``,</span>
+<span class="sd">                ``scipy.sparse.csr_matrix``, or ``networkx.Graph``.</span>
+<span class="sd">            **kwargs: Keyword arguments that override any default declared in</span>
+<span class="sd">                ``fixed_model_parameters``, ``model_parameters``, or</span>
+<span class="sd">                ``common_arguments``.  State initial counts can be supplied as</span>
+<span class="sd">                ``init_&lt;STATE_LABEL&gt;=&lt;count&gt;``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># 1. set member variables acording to init arguments</span>
+        <span class="c1"># definition is couple (default value, description)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">G</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="n">G</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">A</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">init_kwargs</span> <span class="o">=</span> <span class="n">kwargs</span>
+
+        <span class="c1"># 2. model initialization</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span>
+
+        <span class="c1"># 3. time and history setup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span>
+
+        <span class="c1"># 4. init states and their counts</span>
+        <span class="c1"># print(self.init_state_counts)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">()</span>
+
+        <span class="c1"># 5. set callback to None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="c1"># add __init__</span>
+    <span class="n">model_cls</span><span class="o">.</span><span class="fm">__init__</span> <span class="o">=</span> <span class="n">init_function</span>
+
+    <span class="c1"># # add member functions</span>
+    <span class="c1"># function_list = [inicialization,</span>
+    <span class="c1">#                  update_graph,</span>
+    <span class="c1">#                  node_degrees,</span>
+    <span class="c1">#                  setup_series_and_time_keeping,</span>
+    <span class="c1">#                  states_and_counts_init,</span>
+    <span class="c1">#                  set_periodic_update,</span>
+    <span class="c1">#                  update_scenario_flags,</span>
+    <span class="c1">#                  num_contacts,</span>
+    <span class="c1">#                  current_state_count,</span>
+    <span class="c1">#                  current_N,</span>
+    <span class="c1">#                  run_iteration,</span>
+    <span class="c1">#                  run,</span>
+    <span class="c1">#                  finalize_data_series,</span>
+    <span class="c1">#                  increase_data_series_length]</span>
+
+    <span class="c1"># for function in function_list:</span>
+    <span class="c1">#     setattr(model_cls, function.__name__, function)</span>
+
+    <span class="c1"># def not_implemented_yet(self):</span>
+    <span class="c1">#     raise NotImplementedError</span>
+    <span class="k">return</span> <span class="n">model_cls</span></div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

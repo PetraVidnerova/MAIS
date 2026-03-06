@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>states &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>states</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for states</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Epidemic state definitions for the agent-based network model.</span>
+
+<span class="sd">This module defines the integer codes used to identify each epidemiological</span>
+<span class="sd">compartment and provides a human-readable mapping via ``state_codes``.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="c1"># states for agent based model</span>
+
+
+<div class="viewcode-block" id="STATES">
+<a class="viewcode-back" href="../src_modules.html#states.STATES">[docs]</a>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Integer constants representing each epidemiological compartment.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        S (int): Susceptible.</span>
+<span class="sd">        S_s (int): Susceptible with false symptoms.</span>
+<span class="sd">        E (int): Exposed (latent infection).</span>
+<span class="sd">        I_n (int): Infectious, asymptomatic (non-symptomatic track).</span>
+<span class="sd">        I_a (int): Infectious, pre-symptomatic (asymptomatic phase before</span>
+<span class="sd">            symptoms develop).</span>
+<span class="sd">        I_s (int): Infectious, symptomatic.</span>
+<span class="sd">        J_s (int): Post-infectious, symptomatic (RNA-positive, symptomatic).</span>
+<span class="sd">        J_n (int): Post-infectious, asymptomatic (RNA-positive, no symptoms).</span>
+<span class="sd">        R (int): Recovered.</span>
+<span class="sd">        D (int): Dead.</span>
+<span class="sd">        EXT (int): External node (not counted in the population).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">S</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">S_s</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">E</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">I_n</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">I_a</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">I_s</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">J_s</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="n">J_n</span> <span class="o">=</span> <span class="mi">7</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">D</span> <span class="o">=</span> <span class="mi">9</span>
+    <span class="n">EXT</span> <span class="o">=</span> <span class="mi">10</span>
+
+    <span class="k">pass</span></div>
+
+
+
+<span class="c1"># Mapping from STATES integer code to its short string label.</span>
+<span class="n">state_codes</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">:</span>     <span class="s2">&quot;S&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">:</span>   <span class="s2">&quot;S_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">:</span>     <span class="s2">&quot;E&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">:</span>   <span class="s2">&quot;I_n&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">:</span>   <span class="s2">&quot;I_a&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">:</span>   <span class="s2">&quot;I_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">:</span>   <span class="s2">&quot;J_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">:</span>   <span class="s2">&quot;J_n&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">:</span>   <span class="s2">&quot;R&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">D</span><span class="p">:</span>   <span class="s2">&quot;D&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">:</span> <span class="s2">&quot;EXT&quot;</span>
+<span class="p">}</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>engine_sequential &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>engine_sequential</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for engine_sequential</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Sequential (discrete-time daily-step) epidemic simulation engine.</span>
+
+<span class="sd">This module defines :class:`SequentialEngine`, which overrides the continuous-</span>
+<span class="sd">time Gillespie loop of :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine`</span>
+<span class="sd">with a discrete daily-step update: all nodes draw new states simultaneously</span>
+<span class="sd">once per day using roulette-wheel selection over the propensity matrix.</span>
+
+<span class="sd">It also provides an extended :class:`STATES` enumeration and the helper</span>
+<span class="sd">:func:`_searchsorted2d` used for vectorised roulette-wheel selection.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="k">as</span> <span class="nn">scipy</span>
+<span class="kn">import</span> <span class="nn">scipy.integrate</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">gc</span>
+
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">from</span> <span class="nn">models.engine_seirspluslike</span> <span class="kn">import</span> <span class="n">SeirsPlusLikeEngine</span>
+<span class="c1"># from extended_network_model import STATES as s</span>
+
+<span class="c1"># [S SS E In Ia Ids Js Jn Ed Ida 0 0 0 0 0 0 0 0]</span>
+
+
+<div class="viewcode-block" id="STATES">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.STATES">[docs]</a>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended integer state codes used by :class:`SequentialEngine` models.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        S (int): Susceptible.</span>
+<span class="sd">        S_s (int): Susceptible with false symptoms.</span>
+<span class="sd">        E (int): Exposed.</span>
+<span class="sd">        I_n (int): Infectious, asymptomatic non-symptomatic track.</span>
+<span class="sd">        I_a (int): Infectious, pre-symptomatic.</span>
+<span class="sd">        I_s (int): Infectious, symptomatic.</span>
+<span class="sd">        I_ds (int): Infectious, symptomatic, detected.</span>
+<span class="sd">        J_s (int): Post-infectious, symptomatic.</span>
+<span class="sd">        J_n (int): Post-infectious, asymptomatic.</span>
+<span class="sd">        E_d (int): Exposed, detected.</span>
+<span class="sd">        I_da (int): Infectious, pre-symptomatic, detected.</span>
+<span class="sd">        I_dn (int): Infectious, asymptomatic, detected.</span>
+<span class="sd">        J_ds (int): Post-infectious, symptomatic, detected.</span>
+<span class="sd">        J_dn (int): Post-infectious, asymptomatic, detected.</span>
+<span class="sd">        R_d (int): Recovered, detected.</span>
+<span class="sd">        R_u (int): Recovered, undetected.</span>
+<span class="sd">        D_d (int): Dead, detected.</span>
+<span class="sd">        D_u (int): Dead, undetected.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">S</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">S_s</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">E</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">I_n</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">I_a</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">I_s</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">I_ds</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="n">J_s</span> <span class="o">=</span> <span class="mi">11</span>
+    <span class="n">J_n</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">E_d</span> <span class="o">=</span> <span class="mi">13</span>
+    <span class="n">I_da</span> <span class="o">=</span> <span class="mi">14</span>
+    <span class="n">I_dn</span> <span class="o">=</span> <span class="mi">15</span>
+    <span class="n">J_ds</span> <span class="o">=</span> <span class="mi">16</span>
+    <span class="n">J_dn</span> <span class="o">=</span> <span class="mi">17</span>
+    <span class="n">R_d</span> <span class="o">=</span> <span class="mi">7</span>
+    <span class="n">R_u</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">D_d</span> <span class="o">=</span> <span class="mi">9</span>
+    <span class="n">D_u</span> <span class="o">=</span> <span class="mi">10</span>
+
+    <span class="k">pass</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_searchsorted2d</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Vectorised row-wise ``numpy.searchsorted``.</span>
+
+<span class="sd">    For each row *i*, finds the insertion position of ``b[i]`` in ``a[i]``.</span>
+<span class="sd">    Used for efficient roulette-wheel selection across all nodes in one call.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        a (numpy.ndarray): 2-D sorted array of shape ``(m, n)``.</span>
+<span class="sd">        b (numpy.ndarray): 1-D or 2-D query values of shape ``(m,)`` or</span>
+<span class="sd">            ``(m, 1)``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: 1-D array of shape ``(m,)`` with insertion indices.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">m</span><span class="p">,</span> <span class="n">n</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">max_num</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">a</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">b</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">b</span><span class="o">.</span><span class="n">min</span><span class="p">())</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="n">r</span> <span class="o">=</span> <span class="n">max_num</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])[:,</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">((</span><span class="n">a</span><span class="o">+</span><span class="n">r</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">(),</span> <span class="p">(</span><span class="n">b</span><span class="o">+</span><span class="n">r</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">(),</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;right&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">p</span> <span class="o">-</span> <span class="n">n</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">m</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="SequentialEngine">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine">[docs]</a>
+<span class="k">class</span> <span class="nc">SequentialEngine</span><span class="p">(</span><span class="n">SeirsPlusLikeEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Discrete daily-step engine (roulette-wheel selection over propensities).</span>
+
+<span class="sd">    Replaces the continuous-time Gillespie loop of</span>
+<span class="sd">    :class:`~models.engine_seirspluslike.SeirsPlusLikeEngine` with a</span>
+<span class="sd">    synchronous, per-node roulette-wheel update executed once per simulated</span>
+<span class="sd">    day.  All propensities must therefore sum to 1 across transitions for each</span>
+<span class="sd">    node (i.e. they are interpreted as probabilities rather than rates).</span>
+
+<span class="sd">    Additional public methods allow manual state manipulation for scenario</span>
+<span class="sd">    modelling: :meth:`move_to_E`, :meth:`move_to_R`, :meth:`force_infect`,</span>
+<span class="sd">    :meth:`detected_node`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="SequentialEngine.inicialization">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.inicialization">[docs]</a>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the sequential engine and allocate the testable array.</span>
+
+<span class="sd">        Calls the parent :meth:`inicialization`, then creates</span>
+<span class="sd">        ``self.testable`` — a per-node boolean array tracking whether a node</span>
+<span class="sd">        will seek a test when symptomatic.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">testable</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.run_iteration">[docs]</a>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one day of simulation: compute propensities and update states.</span>
+
+<span class="sd">        For every node draws a uniform random number and selects its next state</span>
+<span class="sd">        via roulette-wheel selection over the column of propensities.  State</span>
+<span class="sd">        changes are accumulated in ``self.delta`` and applied in a single batch</span>
+<span class="sd">        at the end of the day.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: Always ``True`` (termination is managed by :meth:`run`).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># memberships check</span>
+        <span class="c1"># try:</span>
+        <span class="c1">#    assert np.all(self.memberships.sum(axis=0) == 1)</span>
+        <span class="c1"># except AssertionError:</span>
+        <span class="c1">#    values = self.memberships.sum(axis=0)</span>
+        <span class="c1">#    print(values.shape)</span>
+        <span class="c1">#    exit()</span>
+
+        <span class="c1"># try:</span>
+        <span class="c1">#    assert np.all(self.memberships &gt;= 0)</span>
+        <span class="c1">#    assert np.all(self.memberships &lt;= 1)</span>
+        <span class="c1"># except AssertionError:</span>
+        <span class="c1">#    print( (self.memberships &lt; 0).nonzero() )</span>
+        <span class="c1">#    exit()</span>
+
+        <span class="n">all_testable</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">testable</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">+</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">testable</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG testable </span><span class="si">{</span><span class="n">all_testable</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># add timeseries members</span>
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_qtests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">durations</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+<span class="c1">#        self.states_history[self.t] = self.states_history[self.t-1]</span>
+        <span class="c1"># self.meaneprobs[self.t] = self.meaneprobs[self.t-1]</span>
+        <span class="c1"># self.medianprobs[self.t] = self.meaneprobs[self.t-1]</span>
+
+        <span class="c1"># print(self.memberships.shape)</span>
+        <span class="c1"># print(np.all(self.memberships.sum(axis=0) == 1))</span>
+        <span class="c1"># print(self.memberships.sum(axis=1))</span>
+
+        <span class="c1"># undetected symptomatic</span>
+        <span class="n">symptomatic_states</span> <span class="o">=</span> <span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span>
+        <span class="n">symptomatic_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">symptomatic_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">symptomatic_states</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span><span class="p">[</span><span class="n">symptomatic_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="n">plist</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">calc_propensities</span><span class="p">()</span>
+
+        <span class="c1">#        for idx, prop in enumerate(plist):</span>
+        <span class="c1">#            print(f&quot;DBG transition {idx} has prop {prop[21105]}&quot;)</span>
+
+        <span class="c1">#s_and_ss = self.memberships[0] + self.memberships[1]</span>
+        <span class="c1">#p_infect = (plist[0] + plist[3])[s_and_ss == 1]</span>
+        <span class="c1"># print(p_infect.mean()&gt;0, np.median(p_infect)&gt;0)</span>
+        <span class="c1"># exit()</span>
+        <span class="c1">#self.meaneprobs[self.t] = p_infect.mean()</span>
+        <span class="c1">#self.medianeprobs[self.t] = np.median(p_infect)</span>
+
+        <span class="n">propensities</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">column_stack</span><span class="p">(</span><span class="n">plist</span><span class="p">)</span>
+        <span class="c1">#        print(f&quot;DBG propensities {propensities[21105,:]}&quot;)</span>
+
+        <span class="c1"># assert np.all(propensities &gt;= 0) and np.all(propensities &lt;= 1), \</span>
+        <span class="c1">#    f&quot;&gt;=0 &amp; &lt;= 1 failed for {propensities[propensities &gt;= 0]} a \</span>
+        <span class="c1">#    {propensities[propensities&lt;=1]} &quot;</span>
+
+        <span class="c1"># check</span>
+        <span class="c1"># print(propensities.shape)</span>
+        <span class="c1"># print(self.memberships.shape)</span>
+        <span class="c1"># print(&quot;node 0&quot;, self.memberships[:, 0].flatten())</span>
+        <span class="c1"># print(propensities[0])</span>
+        <span class="c1"># print(propensities.sum(axis=1q))</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">logical_not</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">))</span><span class="o">.</span><span class="n">nonzero</span><span class="p">())</span>
+            <span class="n">index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_not</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span>
+                <span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">))</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)[</span><span class="n">index</span><span class="p">])</span>
+            <span class="n">index2</span> <span class="o">=</span> <span class="n">propensities</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">index2</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">transitions</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">]],</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">transitions</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">]],</span>
+                    <span class="n">propensities</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="n">i</span><span class="p">]</span>
+                <span class="p">)</span>
+
+            <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">index</span><span class="p">])</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Hey, better exit ... &quot;</span><span class="p">)</span>
+
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">)</span>
+
+        <span class="c1"># add column with pst P[X-&gt;X]</span>
+        <span class="c1"># what is the fastest way to add a column?</span>
+        <span class="c1"># propensities = np.append(</span>
+        <span class="c1">#     propensities, np.product(1.0-propensities, axis=1).reshape(-1, 1), axis=1)</span>
+
+        <span class="n">cumsum</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">propensities</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="c1">#        print(f&quot;DBG cumsum {cumsum[21105]}&quot;)</span>
+
+        <span class="c1">#        total = np.sum(propensities, axis=1)</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="c1">#        print(f&quot;DBG r number {r[21105]}&quot;)</span>
+
+        <span class="c1"># compute which event takes place - roulette wheel selection over rows</span>
+        <span class="n">transition_idx</span> <span class="o">=</span> <span class="n">_searchsorted2d</span><span class="p">(</span><span class="n">cumsum</span><span class="p">,</span> <span class="n">r</span><span class="p">)</span>
+        <span class="c1">#        print(f&quot;DBG transition_idx {transition_idx[21105]}&quot;)</span>
+
+        <span class="c1"># udpate states</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">delta</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># # filter out last transition (that means stay where you are)</span>
+        <span class="c1"># indices = transition_idx != self.num_transitions</span>
+        <span class="c1"># nodes = self.node_ids</span>
+        <span class="c1"># tran_idxes = transition_idx</span>
+
+        <span class="c1"># looks like list(zip()) is faster than zip(), but not sure what is the best</span>
+        <span class="c1"># to walk through two numpy arrays</span>
+        <span class="c1">#        for node, idx in list(zip(nodes, tran_idxes)):</span>
+        <span class="k">for</span> <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">transition_idx</span><span class="p">):</span>
+            <span class="c1"># if idx == self.num_transitions:  # state in current state</span>
+            <span class="c1">#     continue</span>
+            <span class="k">if</span> <span class="n">idx</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transitions</span><span class="p">):</span>
+                <span class="nb">print</span><span class="p">(</span>
+                    <span class="s2">&quot;DBG WARNING idx from searchsorted on the edge of the array, may be round-off error, better to check &quot;</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span>
+                    <span class="s2">&quot;DBG WARNING r &gt; sum, but r = np.random.rand() returns [0,1) and sum should be == 1 (except rounding)&quot;</span><span class="p">)</span>
+                <span class="n">idx</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transitions</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+
+            <span class="n">s</span><span class="p">,</span> <span class="n">e</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transitions</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">s</span> <span class="o">==</span> <span class="n">e</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="c1">#            print(f&quot;{node} goes from {self.state_str_dict[s]} to {self.state_str_dict[e]}&quot;)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">s</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;node not in state </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">node</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">propensities</span><span class="p">[</span><span class="n">node</span><span class="p">,</span> <span class="p">:],</span> <span class="n">idx</span><span class="p">)</span>
+                <span class="n">exit</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">node</span> <span class="o">==</span> <span class="mi">21105</span><span class="p">:</span>
+                <span class="c1"># stalking</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ACTION LOG (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2">): node </span><span class="si">{</span><span class="n">node</span><span class="si">}</span><span class="s2"> changing state from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">e</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node</span><span class="p">])</span>
+            <span class="k">if</span> <span class="n">e</span> <span class="ow">in</span> <span class="p">(</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span>
+                    <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span>
+            <span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span><span class="p">[</span><span class="n">node</span><span class="p">]</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+            <span class="c1"># node developed symptoms</span>
+            <span class="k">if</span> <span class="n">e</span> <span class="o">==</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_rate</span><span class="p">[</span><span class="n">node</span><span class="p">]:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">testable</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+            <span class="c1"># node starts to be infectious</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="p">(</span><span class="n">s</span> <span class="o">==</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span> <span class="ow">and</span> <span class="n">e</span> <span class="ow">in</span> <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">))</span>
+                <span class="ow">or</span> <span class="p">(</span><span class="n">s</span> <span class="o">==</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span> <span class="ow">and</span> <span class="n">e</span> <span class="ow">in</span> <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">))</span>
+            <span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">infect_start</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span> <span class="ow">in</span> <span class="p">[</span>
+                    <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">),</span>
+                    <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">),</span>
+                    <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">),</span>
+                    <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">)</span>
+            <span class="p">]:</span>
+                <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">infect_start</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">infect_time</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">infect_start</span><span class="p">[</span><span class="n">node</span><span class="p">]</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">delta</span><span class="p">[</span><span class="n">s</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">delta</span><span class="p">[</span><span class="n">e</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">e</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">e</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="c1">#self.states_history[self.t][node] = e</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">increase_history_len</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+
+            <span class="c1"># if node died</span>
+            <span class="k">if</span> <span class="n">e</span> <span class="ow">in</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">invisible_states</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+
+        <span class="c1"># the real states update</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">delta</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<span class="c1">#     def print(self, verbose=False):</span>
+<span class="c1">#         print(&quot;t = %.2f&quot; % self.t)</span>
+<span class="c1">#         if verbose:</span>
+<span class="c1">#             for state in self.states:</span>
+<span class="c1">#                 print(f&quot;\t {self.state_str_dict[state]} = {self.current_state_count(state)}&quot;)</span>
+<span class="c1"># #                print(flush=True)</span>
+
+<div class="viewcode-block" id="SequentialEngine.run">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the simulation for *T* days with daily-step updates.</span>
+
+<span class="sd">        Iterates over days 1..T calling :meth:`run_iteration` each day.</span>
+<span class="sd">        Fires ``self.periodic_update_callback`` when set.  If the epidemic</span>
+<span class="sd">        ends early (all unstable counts zero), fills remaining days with the</span>
+<span class="sd">        last observed counts.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            T (int): Number of days to simulate.</span>
+<span class="sd">            print_interval (int, optional): Print status every this many days.</span>
+<span class="sd">                Set to ``0`` to suppress. Defaults to ``0``.</span>
+<span class="sd">            verbose (bool, optional): If ``True``, print per-state counts at</span>
+<span class="sd">                each interval. Defaults to ``False``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: Always ``True``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># keep it, saves time</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">delta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_states</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">node_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+
+        <span class="n">running</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+            <span class="c1">#print(&quot;DBG graph.layer_weights&quot;, self.graph.layer_weights)</span>
+            <span class="c1">#            os.system(&quot;free -h&quot;)</span>
+            <span class="k">if</span> <span class="n">__debug__</span> <span class="ow">and</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="c1">#                input()</span>
+            <span class="c1">#            print(f&quot;day {self.t}&quot;)</span>
+
+            <span class="c1"># print(self.t)</span>
+            <span class="c1"># print(len(self.state_counts[0]))</span>
+            <span class="c1"># print(len(self.states_history))</span>
+            <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="mi">0</span><span class="p">])):</span>
+                <span class="c1"># room has run out in the timeseries storage arrays; double the size of these arrays</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+                <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+            <span class="n">running</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span>
+
+            <span class="c1"># run periodical update</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+                <span class="c1"># changes = self.periodic_update_callback(</span>
+                <span class="c1">#     self.history, self.tseries[:self.tidx +</span>
+                <span class="c1">#                                1], self.t, self.contact_history,</span>
+                <span class="c1">#     self.memberships)</span>
+
+                <span class="c1"># if &quot;graph&quot; in changes:</span>
+                <span class="c1">#     print(&quot;CHANGING GRAPH&quot;)</span>
+                <span class="c1">#     self.update_graph(changes[&quot;graph&quot;])</span>
+            <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+                    <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Last day took: &quot;</span><span class="p">,</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">,</span> <span class="s2">&quot;seconds&quot;</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="n">print_interval</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+
+            <span class="c1"># Terminate if tmax reached or num infectious and num exposed is 0:</span>
+            <span class="n">numI</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+                        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">unstable_states</span>
+                        <span class="p">])</span>
+            <span class="c1"># if True:</span>
+            <span class="c1">#     GIRL = 29691</span>
+            <span class="c1">#     # infect the girl 29691</span>
+            <span class="c1">#     if self.graph.layer_weights[30] == 1.0:</span>
+            <span class="c1">#         # move node 29691 to E</span>
+            <span class="c1">#         orig_state = self.memberships[:, GIRL].nonzero()[0][0]</span>
+            <span class="c1">#         if orig_state == STATES.E:</span>
+            <span class="c1">#             print(f&quot;ACTION LOG(92): node 29691 enters the party already exposed&quot;)</span>
+            <span class="c1">#         else:</span>
+            <span class="c1">#             print(f&quot;ACTION LOG(92): node 29691 feeded by infection&quot;)</span>
+            <span class="c1">#             self.state_counts[STATES.E][self.t] += 1</span>
+            <span class="c1">#             self.state_counts[orig_state][self.t] -= 1</span>
+            <span class="c1">#             self.state_increments[STATES.E][self.t] += 1</span>
+            <span class="c1">#             self.memberships[STATES.E][GIRL] = 1</span>
+            <span class="c1">#             self.memberships[orig_state][GIRL] = 0</span>
+
+            <span class="c1"># if not numI &gt; 0:</span>
+            <span class="c1">#    break</span>
+            <span class="c1"># gc.collect()</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&lt;</span> <span class="n">T</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="mi">0</span><span class="p">])):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">=</span> <span class="n">T</span>
+
+        <span class="c1"># finalize durations</span>
+        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="n">durations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">durations</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.increase_data_series_length">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.increase_data_series_length">[docs]</a>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend all daily time-series buffers by 100 entries.</span>
+
+<span class="sd">        Called automatically when the pre-allocated storage is exhausted.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_qtests</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="c1"># self.states_history.bloat(100)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meaneprobs</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">medianeprobs</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.increase_history_len">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.increase_history_len">[docs]</a>
+    <span class="k">def</span> <span class="nf">increase_history_len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the event-history and time-series buffers.</span>
+
+<span class="sd">        Enlarges ``self.tseries`` and ``self.history`` by</span>
+<span class="sd">        ``10 * num_nodes`` entries.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.finalize_data_series">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.finalize_data_series">[docs]</a>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually consumed length.</span>
+
+<span class="sd">        Calls ``finalize(self.t)`` on every daily</span>
+<span class="sd">        :class:`~utils.history_utils.TimeSeries` and ``finalize(self.tidx)``</span>
+<span class="sd">        on the event-log series.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_qtests</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="c1"># self.states_history.finalize(self.t)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meaneprobs</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">medianeprobs</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.current_state_count">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.current_state_count">[docs]</a>
+    <span class="k">def</span> <span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the count of nodes in *state* at the current day.</span>
+
+<span class="sd">        Overrides the parent method: uses ``self.t`` (day index) rather than</span>
+<span class="sd">        ``self.tidx`` (event index).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state (int): State code.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Node count on the current day.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.current_N">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.current_N">[docs]</a>
+    <span class="k">def</span> <span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the effective population size on the current day.</span>
+
+<span class="sd">        Overrides the parent method: uses ``self.t`` rather than</span>
+<span class="sd">        ``self.tidx``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            float: Population size (excluding invisible-state nodes).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.get_state_count">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.get_state_count">[docs]</a>
+    <span class="k">def</span> <span class="nf">get_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return per-day count time-series for a given state or all states.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state (int, optional): State code.  If ``None``, returns the full</span>
+<span class="sd">                ``state_counts`` dictionary. Defaults to ``None``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            TimeSeries or dict: The per-day count series for *state*, or the</span>
+<span class="sd">            complete ``state_counts`` mapping when *state* is ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.to_df">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert simulation output to a :class:`pandas.DataFrame`.</span>
+
+<span class="sd">        Extends the parent :meth:`to_df` with additional test-related columns:</span>
+<span class="sd">        ``tests``, ``quarantine_tests``, ``sum_of_waiting``, and</span>
+<span class="sd">        ``all_positive_tests``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: Combined state-count, increment, and test</span>
+<span class="sd">            statistics indexed by day.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span>
+            <span class="n">tests</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span><span class="p">,</span>
+            <span class="n">quarantine_tests</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_qtests</span><span class="p">,</span>
+            <span class="n">sum_of_waiting</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="p">,</span>
+            <span class="n">all_positive_tests</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+    <span class="c1">#     index = range(0, self.t+1)</span>
+    <span class="c1">#     col_increments = {</span>
+    <span class="c1">#         &quot;inc_&quot; + self.state_str_dict[x]: col_inc</span>
+    <span class="c1">#         for x, col_inc in self.state_increments.items()</span>
+    <span class="c1">#     }</span>
+    <span class="c1">#     col_states = {</span>
+    <span class="c1">#         self.state_str_dict[x]: count</span>
+    <span class="c1">#         for x, count in self.state_counts.items()</span>
+    <span class="c1">#     }</span>
+    <span class="c1">#     columns = {**col_states, **col_increments, **col_tests}</span>
+    <span class="c1">#     columns[&quot;day&quot;] = np.floor(index).astype(int)</span>
+    <span class="c1">#     columns[&quot;mean_p_infection&quot;] = self.meaneprobs</span>
+    <span class="c1">#     columns[&quot;median_p_infection&quot;] = self.medianeprobs</span>
+    <span class="c1">#     df = pd.DataFrame(columns, index=index)</span>
+    <span class="c1">#     df.index.rename(&#39;T&#39;, inplace=True)</span>
+    <span class="c1">#     return df</span>
+
+    <span class="c1"># def save(self, file_or_filename):</span>
+    <span class="c1">#     &quot;&quot;&quot; Save timeseries. They have different format than in BaseEngine,</span>
+    <span class="c1">#     so I redefined save method here &quot;&quot;&quot;</span>
+    <span class="c1">#     df = self.to_df()</span>
+    <span class="c1">#     df.to_csv(file_or_filename)</span>
+    <span class="c1">#     print(df)</span>
+
+<div class="viewcode-block" id="SequentialEngine.save_durations">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.save_durations">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Write per-state duration lists to an open file as CSV rows.</span>
+
+<span class="sd">        Each row contains the state label followed by comma-separated integer</span>
+<span class="sd">        durations (in days).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            f (file-like): Open writable file object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="n">line</span> <span class="o">=</span> <span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]])</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">line</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">f</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.save_node_states">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.save_node_states">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Write the per-node state history to a CSV file.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Destination file path.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="o">.</span><span class="n">values</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+        <span class="c1"># df = df.replace(self.state_str_dict)</span>
+        <span class="c1"># df.to_csv(filename)</span>
+        <span class="c1"># print(df)</span>
+
+<div class="viewcode-block" id="SequentialEngine.move_to_E">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.move_to_E">[docs]</a>
+    <span class="k">def</span> <span class="nf">move_to_E</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly expose *num* susceptible nodes by moving them to state E.</span>
+
+<span class="sd">        Only nodes currently in S or S_s are eligible.  The operation</span>
+<span class="sd">        updates state counts, increments, membership arrays, and duration</span>
+<span class="sd">        tracking for the current day.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            num (int): Number of nodes to expose.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">num</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">node_number</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="n">orig_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">node_number</span><span class="p">]</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">orig_state</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">):</span>
+                <span class="k">continue</span>
+            <span class="n">new_state</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG Moving node </span><span class="si">{</span><span class="n">node_number</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">new_state</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.move_to_R">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.move_to_R">[docs]</a>
+    <span class="k">def</span> <span class="nf">move_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Move a specific set of exposed nodes directly to the detected-recovered state.</span>
+
+<span class="sd">        Only nodes currently in state E are supported.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (iterable of int): Node indices to move.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If any node in *nodes* is not currently in state E.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">node_number</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="n">orig_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">node_number</span><span class="p">]</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">orig_state</span> <span class="o">!=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">()</span>
+            <span class="n">new_state</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG Moving node </span><span class="si">{</span><span class="n">node_number</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">new_state</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.force_infect">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.force_infect">[docs]</a>
+    <span class="k">def</span> <span class="nf">force_infect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Forcibly move a set of nodes to the symptomatic-infectious state I_s.</span>
+
+<span class="sd">        Dead nodes (D_d, D_u) are silently skipped.  All other nodes are</span>
+<span class="sd">        moved regardless of their current state.  Intended for scenario</span>
+<span class="sd">        seeding.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (iterable of int): Node indices to infect.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">node_number</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="n">orig_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">node_number</span><span class="p">]</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">orig_state</span> <span class="ow">in</span> <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">):</span>
+                <span class="k">continue</span>
+            <span class="c1">#            asymptomatic = np.random.rand() &gt; self.asymptomatic_rate</span>
+            <span class="c1">#            new_state = STATES.I_n if asymptomatic else STATES.I_a</span>
+            <span class="n">new_state</span> <span class="o">=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG Moving node </span><span class="si">{</span><span class="n">node_number</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">new_state</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="SequentialEngine.detected_node">
+<a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.detected_node">[docs]</a>
+    <span class="k">def</span> <span class="nf">detected_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_number</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Mark a node as detected (positive test) and transition it accordingly.</span>
+
+<span class="sd">        Maps the node&#39;s current undetected state to its detected counterpart</span>
+<span class="sd">        (e.g. E → E_d, I_s → I_ds).  If the node is already in a detected or</span>
+<span class="sd">        terminal state, the call is a no-op.  Also updates test-waiting</span>
+<span class="sd">        statistics.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_number (int): Index of the node that tested positive.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If the node is in an unexpected state.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># self.num_qtests[self.t] += 1</span>
+        <span class="n">orig_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">node_number</span><span class="p">]</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">orig_state</span> <span class="ow">in</span> <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span>
+                          <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">):</span>
+            <span class="k">return</span>
+
+        <span class="n">transitions</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">),</span>
+            <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">),</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">transitions</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">orig_state</span> <span class="o">==</span> <span class="n">t</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
+                <span class="n">new_state</span> <span class="o">=</span> <span class="n">t</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+                <span class="k">if</span> <span class="mi">29691</span> <span class="o">==</span> <span class="n">node_number</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ACTION LOG(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2">): node 29691 forced to change state to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">new_state</span><span class="p">]</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">orig_state</span><span class="p">][</span><span class="n">node_number</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="k">return</span>
+
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unexpected state: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">orig_state</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>search_methods &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>search_methods</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for search_methods</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Hyperparameter search algorithms for epidemic model calibration.</span>
+
+<span class="sd">This module implements two search strategies:</span>
+
+<span class="sd">* **Grid search** (``perform_gridsearch``) – exhaustive evaluation of a</span>
+<span class="sd">  Cartesian product of discrete parameter values using a multiprocessing pool.</span>
+<span class="sd">* **CMA-ES** (``cma_es``) – a gradient-free evolutionary strategy (Covariance</span>
+<span class="sd">  Matrix Adaptation Evolution Strategy) for continuous parameter spaces.</span>
+
+<span class="sd">Both strategies accept a ``model_func`` callable with signature</span>
+<span class="sd">``model_func(hyperparams: dict) -&gt; dict`` and a ``hyperparam_config`` dict</span>
+<span class="sd">loaded from a JSON configuration file.</span>
+
+<span class="sd">Internal helpers manage sigmoid-based parameter rescaling so that CMA-ES</span>
+<span class="sd">operates on an unconstrained real-valued search space.</span>
+
+<span class="sd">The ``hyperparam_search_zoo`` dictionary maps string keys (``&#39;GridSearch&#39;``,</span>
+<span class="sd">``&#39;CMA-ES&#39;``) to the corresponding search function.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">warnings</span>
+
+<span class="kn">import</span> <span class="nn">cma</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy.special</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="kn">import</span> <span class="n">Pool</span>
+
+<span class="kn">from</span> <span class="nn">cma.optimization_tools</span> <span class="kn">import</span> <span class="n">EvalParallel2</span>
+<span class="kn">from</span> <span class="nn">sklearn.model_selection</span> <span class="kn">import</span> <span class="n">ParameterGrid</span>
+<span class="kn">import</span> <span class="nn">gc</span>
+
+
+<span class="k">def</span> <span class="nf">_run_model_with_hyperparams</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparams</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate ``model_func`` with a specific hyperparameter dict and log the result.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model_func (callable): Function with signature</span>
+<span class="sd">            ``model_func(hyperparams: dict) -&gt; dict``.  The returned dict must</span>
+<span class="sd">            have a ``&quot;result&quot;`` key whose value is a scalar or a sequence of</span>
+<span class="sd">            scalars.</span>
+<span class="sd">        hyperparams (dict): Hyperparameter values for this evaluation.</span>
+<span class="sd">        output_file (str or None): Path to a CSV file for logging.  Each call</span>
+<span class="sd">            appends one row.  Pass ``None`` to disable logging.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Raw result dict returned by ``model_func``, including at least</span>
+<span class="sd">        ``&quot;result&quot;`` and ``&quot;hyperparams&quot;`` keys.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running with hyperparams: </span><span class="si">{</span><span class="n">hyperparams</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">res</span> <span class="o">=</span> <span class="n">model_func</span><span class="p">(</span><span class="n">hyperparams</span><span class="o">=</span><span class="n">hyperparams</span><span class="p">)</span>
+
+    <span class="n">fitness</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">])</span>
+    <span class="n">_log_inidividual</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">hyperparams</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span> <span class="n">fitness</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Finished run with hyperparams: </span><span class="si">{</span><span class="n">hyperparams</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">res</span>
+
+
+<div class="viewcode-block" id="perform_gridsearch">
+<a class="viewcode-back" href="../src_modules.html#search_methods.perform_gridsearch">[docs]</a>
+<span class="k">def</span> <span class="nf">perform_gridsearch</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Exhaustively evaluate all parameter combinations defined in ``hyperparam_config``.</span>
+
+<span class="sd">    Builds a Cartesian product of the discrete parameter values listed under</span>
+<span class="sd">    the ``&quot;MODEL&quot;`` key of ``hyperparam_config`` and evaluates each combination</span>
+<span class="sd">    in parallel using a ``multiprocessing.Pool``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model_func (callable): Function with signature</span>
+<span class="sd">            ``model_func(hyperparams: dict) -&gt; dict`` that runs the model and</span>
+<span class="sd">            returns a result dictionary.</span>
+<span class="sd">        hyperparam_config (dict): Search configuration.  Must contain a</span>
+<span class="sd">            ``&quot;MODEL&quot;`` key mapping parameter names to lists of candidate</span>
+<span class="sd">            values (same format as ``sklearn.model_selection.ParameterGrid``).</span>
+<span class="sd">        n_jobs (int): Number of parallel worker processes.  Defaults to ``1``</span>
+<span class="sd">            (sequential execution).</span>
+<span class="sd">        output_file (str or None): Path to a CSV log file.  Pass ``None`` to</span>
+<span class="sd">            disable logging.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list[dict]: List of result dicts (one per parameter combination),</span>
+<span class="sd">        each containing at least ``&quot;result&quot;`` and ``&quot;hyperparams&quot;`` keys.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="n">hyperparam_config</span><span class="p">[</span><span class="s2">&quot;MODEL&quot;</span><span class="p">]</span>
+    <span class="n">param_grid</span> <span class="o">=</span> <span class="n">ParameterGrid</span><span class="p">(</span><span class="n">grid</span><span class="p">)</span>
+
+    <span class="n">header</span> <span class="o">=</span> <span class="n">grid</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+    <span class="n">_init_output_file</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">header</span><span class="p">)</span>
+
+    <span class="n">run_model</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_run_model_with_hyperparams</span><span class="p">,</span> <span class="n">model_func</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">)</span>
+    <span class="k">with</span> <span class="n">Pool</span><span class="p">(</span><span class="n">processes</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">)</span> <span class="k">as</span> <span class="n">pool</span><span class="p">:</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">run_model</span><span class="p">,</span> <span class="n">param_grid</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">res</span></div>
+
+
+
+<div class="viewcode-block" id="evaluate_with_params">
+<a class="viewcode-back" href="../src_modules.html#search_methods.evaluate_with_params">[docs]</a>
+<span class="k">def</span> <span class="nf">evaluate_with_params</span><span class="p">(</span><span class="n">param_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">model_func</span><span class="p">,</span> <span class="n">param_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate ``model_func`` using a raw (sigmoid-encoded) parameter array.</span>
+
+<span class="sd">    Decodes ``param_array`` from the internal CMA-ES representation (applying</span>
+<span class="sd">    the inverse sigmoid and optional range rescaling via ``_compile_individual``)</span>
+<span class="sd">    and then calls ``model_func`` with the resulting hyperparameter dictionary.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        param_array (numpy.ndarray): 1-D array of parameter values in the</span>
+<span class="sd">            internal (unconstrained) search space used by CMA-ES.</span>
+<span class="sd">        model_func (callable): Function with signature</span>
+<span class="sd">            ``model_func(hyperparams: dict) -&gt; dict``.</span>
+<span class="sd">        param_keys (list[str]): Ordered list of parameter names corresponding</span>
+<span class="sd">            to the elements of ``param_array``.</span>
+<span class="sd">        param_ranges (dict or None): Optional mapping of parameter name to</span>
+<span class="sd">            ``(lower, upper)`` bounds used for rescaling.  Pass ``None`` for</span>
+<span class="sd">            the sigmoid-only (``[0, 1]``) encoding.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Mean of the model result values (``np.mean(res[&quot;result&quot;])``).</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        AssertionError: If the length of ``param_array`` does not match the</span>
+<span class="sd">            length of ``param_keys``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">param_array</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">param_keys</span><span class="p">)</span>
+
+    <span class="n">hyperparam_dict</span> <span class="o">=</span> <span class="n">_compile_individual</span><span class="p">(</span><span class="n">param_array</span><span class="p">,</span> <span class="n">param_keys</span><span class="o">=</span><span class="n">param_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="n">param_ranges</span><span class="p">)</span>
+    <span class="n">model_res</span> <span class="o">=</span> <span class="n">model_func</span><span class="p">(</span><span class="n">hyperparams</span><span class="o">=</span><span class="n">hyperparam_dict</span><span class="p">)[</span><span class="s2">&quot;result&quot;</span><span class="p">]</span>
+
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">model_res</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_keys_with_evolved_vals</span><span class="p">(</span><span class="n">evolved_vals</span><span class="p">,</span> <span class="n">keys</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Zip parameter keys and values into a dictionary.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        evolved_vals (iterable): Sequence of parameter values.</span>
+<span class="sd">        keys (iterable): Sequence of parameter names, in the same order as</span>
+<span class="sd">            ``evolved_vals``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Mapping from parameter name to value.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span> <span class="n">evolved_vals</span><span class="p">)}</span>
+
+
+<span class="k">def</span> <span class="nf">_init_output_file</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">header</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create or overwrite the CSV log file and write its header row.</span>
+
+<span class="sd">    If ``output_file`` is ``None`` the function is a no-op.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        output_file (str or None): Path to the CSV log file to create.</span>
+<span class="sd">        header (iterable[str]): Ordered sequence of parameter names that form</span>
+<span class="sd">            the middle columns of the header.  The row format is</span>
+<span class="sd">            ``gen,&lt;param1&gt;,&lt;param2&gt;,...,fitness``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">output_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="s1">&#39;w+&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">of</span><span class="p">:</span>
+            <span class="n">key_string</span> <span class="o">=</span> <span class="s1">&#39;,&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">header</span><span class="p">)</span>
+            <span class="n">of</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;gen,</span><span class="si">{</span><span class="n">key_string</span><span class="si">}</span><span class="s2">,fitness</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_log_inidividual</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">fitness</span><span class="p">,</span> <span class="n">gen</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Append one individual&#39;s evaluation record to the CSV log file.</span>
+
+<span class="sd">    If ``output_file`` is ``None`` the function is a no-op.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        output_file (str or None): Path to an already-initialised CSV log file.</span>
+<span class="sd">        x (iterable): Sequence of decoded (human-readable) parameter values</span>
+<span class="sd">            for this individual.</span>
+<span class="sd">        fitness (float): Fitness (loss) value for this individual.</span>
+<span class="sd">        gen (int): Generation index (0-based) at which this individual was</span>
+<span class="sd">            evaluated.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">output_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">of</span><span class="p">:</span>
+            <span class="n">of</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">gen</span><span class="si">}</span><span class="s1">,</span><span class="si">{</span><span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">x</span><span class="p">)</span><span class="si">}</span><span class="s1">,</span><span class="si">{</span><span class="n">fitness</span><span class="si">}</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>  <span class="c1"># joined hyperparam values and fitness</span>
+
+
+<span class="k">def</span> <span class="nf">_inverse_sigmoid</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the logit (inverse-sigmoid) function element-wise to ``x``.</span>
+
+<span class="sd">    Values are clamped to ``[eps, 1 - eps]`` (where ``eps`` is</span>
+<span class="sd">    ``np.finfo(np.float32).eps``) before the transform to avoid numerical</span>
+<span class="sd">    instability at the boundaries.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        x (numpy.ndarray): Array of values in the interval ``(0, 1)``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Logit-transformed values (unconstrained real numbers).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="o">+</span><span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span> <span class="mi">1</span><span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">x</span><span class="o">/</span><span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">x</span><span class="p">))</span>
+
+
+<span class="k">def</span> <span class="nf">_init_values</span><span class="p">(</span><span class="n">value_dict</span><span class="p">,</span> <span class="n">ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert initial parameter values to the internal CMA-ES search space.</span>
+
+<span class="sd">    Parameters that have defined bounds in ``ranges`` are first linearly scaled</span>
+<span class="sd">    to ``[0, 1]`` and then mapped through the logit transform.  Parameters</span>
+<span class="sd">    without explicit bounds are assumed to already be in ``(0, 1)`` and are</span>
+<span class="sd">    only logit-transformed.  Any parameter that appears in ``ranges`` but not</span>
+<span class="sd">    in ``value_dict`` is initialised to ``0.5`` (the midpoint of the bounded</span>
+<span class="sd">    interval before logit-transform).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        value_dict (dict): Mapping of parameter name to initial value.</span>
+<span class="sd">        ranges (dict or None): Optional mapping of parameter name to</span>
+<span class="sd">            ``(lower, upper)`` bounds.  Parameters not present in ``ranges``</span>
+<span class="sd">            must already lie in ``(0, 1)``.  Pass ``None`` to treat all</span>
+<span class="sd">            parameters as unbounded in ``(0, 1)``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: A two-element tuple ``(keys, encoded_vals)`` where</span>
+
+<span class="sd">            * ``keys`` (list[str]) – ordered list of parameter names.</span>
+<span class="sd">            * ``encoded_vals`` (numpy.ndarray) – logit-encoded initial values</span>
+<span class="sd">              in the unconstrained search space.</span>
+
+<span class="sd">        When ``ranges`` is ``None``, only the encoded values are returned (the</span>
+<span class="sd">        keys are implicitly those of ``value_dict``).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">ranges</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">initial_vals</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value_dict</span><span class="o">.</span><span class="n">values</span><span class="p">()])</span>
+        <span class="k">return</span> <span class="n">_inverse_sigmoid</span><span class="p">(</span><span class="n">initial_vals</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">lower</span><span class="p">,</span> <span class="n">upper</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">lower</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">upper</span> <span class="o">-</span> <span class="n">lower</span><span class="p">)</span>
+
+    <span class="n">res_keys</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">res_vals</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ranges</span><span class="p">:</span>
+            <span class="n">res_vals</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">low</span><span class="p">,</span> <span class="n">up</span> <span class="o">=</span> <span class="n">ranges</span><span class="p">[</span><span class="n">k</span><span class="p">]</span>
+            <span class="n">res_vals</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">scale</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">low</span><span class="p">,</span> <span class="n">up</span><span class="p">))</span>
+        <span class="n">res_keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
+
+    <span class="c1"># keys only in ranges</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">ranges</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">value_dict</span><span class="p">:</span>
+            <span class="n">res_keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
+            <span class="n">res_vals</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="mf">0.5</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">res_keys</span><span class="p">,</span> <span class="n">_inverse_sigmoid</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">res_vals</span><span class="p">))</span>
+
+
+<span class="k">def</span> <span class="nf">_compile_individual</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">param_keys</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">with_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Decode an individual from the CMA-ES search space to human-readable values.</span>
+
+<span class="sd">    Applies the sigmoid function and, where ``param_ranges`` are provided,</span>
+<span class="sd">    linearly rescales from ``[0, 1]`` back to the original parameter range</span>
+<span class="sd">    ``[lower, upper]``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        x (numpy.ndarray): 1-D array of parameter values in the internal</span>
+<span class="sd">            (logit-encoded) search space.</span>
+<span class="sd">        param_keys (list[str] or None): Ordered list of parameter names</span>
+<span class="sd">            corresponding to the elements of ``x``.</span>
+<span class="sd">        param_ranges (dict or None): Optional mapping of parameter name to</span>
+<span class="sd">            ``(lower, upper)`` bounds used for rescaling.  Parameters not</span>
+<span class="sd">            listed here are decoded with sigmoid only (result in ``(0, 1)``).</span>
+<span class="sd">        with_keys (bool): If ``True`` (default), return a ``dict`` mapping</span>
+<span class="sd">            parameter names to decoded values.  If ``False``, return a plain</span>
+<span class="sd">            list of decoded values.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict or list: Decoded parameter values.  Type depends on ``with_keys``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">scale_back</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+        <span class="n">val</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">special</span><span class="o">.</span><span class="n">expit</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+        <span class="n">low</span><span class="p">,</span> <span class="n">up</span> <span class="o">=</span> <span class="n">param_ranges</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">val</span> <span class="o">*</span> <span class="p">(</span><span class="n">up</span> <span class="o">-</span> <span class="n">low</span><span class="p">)</span> <span class="o">+</span> <span class="n">low</span>
+
+    <span class="c1"># optional rescaling</span>
+    <span class="k">if</span> <span class="n">param_ranges</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ind</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">special</span><span class="o">.</span><span class="n">expit</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">ind</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">param_keys</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+            <span class="n">ind</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">val</span> <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">param_ranges</span> <span class="k">else</span> <span class="n">scale_back</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span>
+
+    <span class="c1"># return with keys or not</span>
+    <span class="k">return</span> <span class="n">_keys_with_evolved_vals</span><span class="p">(</span><span class="n">ind</span><span class="p">,</span> <span class="n">param_keys</span><span class="p">)</span> <span class="k">if</span> <span class="n">with_keys</span> <span class="k">else</span> <span class="n">ind</span>
+
+
+<div class="viewcode-block" id="cma_es">
+<a class="viewcode-back" href="../src_modules.html#search_methods.cma_es">[docs]</a>
+<span class="k">def</span> <span class="nf">cma_es</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">return_only_best</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Optimise model hyperparameters using CMA-ES (Covariance Matrix Adaptation Evolution Strategy).</span>
+
+<span class="sd">    Uses the ``cma`` library to iteratively propose candidate parameter</span>
+<span class="sd">    vectors, evaluate them in parallel via ``EvalParallel2``, and update the</span>
+<span class="sd">    evolution strategy.  An elitism mechanism replaces the worst individual of</span>
+<span class="sd">    each generation with the all-time best solution found so far.</span>
+
+<span class="sd">    Parameters are encoded in an unconstrained search space using the logit</span>
+<span class="sd">    transform (see ``_init_values`` / ``_compile_individual``).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model_func (callable): Function with signature</span>
+<span class="sd">            ``model_func(hyperparams: dict) -&gt; dict`` to be minimised.</span>
+<span class="sd">        hyperparam_config (dict): CMA-ES configuration dictionary.  Expected</span>
+<span class="sd">            keys:</span>
+
+<span class="sd">            * ``&quot;MODEL&quot;`` – initial parameter values (dict).</span>
+<span class="sd">            * ``&quot;SIGMA&quot;`` – initial step size (float).</span>
+<span class="sd">            * ``&quot;CMA&quot;`` – keyword arguments forwarded directly to</span>
+<span class="sd">              ``cma.CMAEvolutionStrategy``.</span>
+<span class="sd">            * ``&quot;param_ranges&quot;`` (optional) – per-parameter ``(lower, upper)``</span>
+<span class="sd">              bounds for rescaling.</span>
+
+<span class="sd">        return_only_best (bool): If ``True``, return only the best solution and</span>
+<span class="sd">            its fitness without the full CMA-ES result object.  Defaults to</span>
+<span class="sd">            ``False``.</span>
+<span class="sd">        output_file (str or None): Path to a CSV log file.  Each individual</span>
+<span class="sd">            evaluated is appended as one row.  Pass ``None`` to disable.</span>
+<span class="sd">        n_jobs (int): Number of parallel worker processes for fitness</span>
+<span class="sd">            evaluation.  Defaults to ``1``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Result dictionary with the following keys:</span>
+
+<span class="sd">            * ``&quot;hyperparams&quot;`` – decoded best parameter dictionary.</span>
+<span class="sd">            * ``&quot;result&quot;`` – best fitness value found.</span>
+<span class="sd">            * ``&quot;es_data&quot;`` (only when ``return_only_best=False``) – remaining</span>
+<span class="sd">              fields from ``cma.CMAEvolutionStrategy.result``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">initial_kwargs</span> <span class="o">=</span> <span class="n">hyperparam_config</span><span class="p">[</span><span class="s2">&quot;MODEL&quot;</span><span class="p">]</span>
+
+    <span class="n">param_ranges</span> <span class="o">=</span> <span class="n">hyperparam_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;param_ranges&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">initial_keys</span><span class="p">,</span> <span class="n">initial_vals</span> <span class="o">=</span> <span class="n">_init_values</span><span class="p">(</span><span class="n">initial_kwargs</span><span class="p">,</span> <span class="n">ranges</span><span class="o">=</span><span class="n">param_ranges</span><span class="p">)</span>
+
+    <span class="n">sigma</span> <span class="o">=</span> <span class="n">hyperparam_config</span><span class="p">[</span><span class="s2">&quot;SIGMA&quot;</span><span class="p">]</span>
+    <span class="n">cma_kwargs</span> <span class="o">=</span> <span class="n">hyperparam_config</span><span class="p">[</span><span class="s2">&quot;CMA&quot;</span><span class="p">]</span>
+
+    <span class="n">_init_output_file</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">initial_keys</span><span class="p">)</span>
+    <span class="n">eval_func</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">evaluate_with_params</span><span class="p">,</span> <span class="n">model_func</span><span class="o">=</span><span class="n">model_func</span><span class="p">,</span>
+                        <span class="n">param_keys</span><span class="o">=</span><span class="n">initial_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="n">param_ranges</span><span class="p">)</span>
+
+    <span class="n">es</span> <span class="o">=</span> <span class="n">cma</span><span class="o">.</span><span class="n">CMAEvolutionStrategy</span><span class="p">(</span><span class="n">initial_vals</span><span class="p">,</span> <span class="n">sigma</span><span class="p">,</span> <span class="n">cma_kwargs</span><span class="p">)</span>
+
+    <span class="n">gen_n</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">best_x</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">best_f</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">)</span>
+
+    <span class="k">while</span> <span class="ow">not</span> <span class="n">es</span><span class="o">.</span><span class="n">stop</span><span class="p">():</span>
+        <span class="n">X</span> <span class="o">=</span> <span class="n">es</span><span class="o">.</span><span class="n">ask</span><span class="p">()</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;NJOBS&quot;</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">EvalParallel2</span><span class="p">(</span><span class="n">fitness_function</span><span class="o">=</span><span class="n">eval_func</span><span class="p">,</span> <span class="n">number_of_processes</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">)</span> <span class="k">as</span> <span class="n">eval_all</span><span class="p">:</span>
+            <span class="n">fitnesses</span> <span class="o">=</span> <span class="n">eval_all</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;POPSIZE&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">fitnesses</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">fitnesses</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">f</span> <span class="o">&lt;</span> <span class="n">best_f</span><span class="p">:</span>
+                <span class="n">best_f</span> <span class="o">=</span> <span class="n">f</span>
+                <span class="n">best_x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>    
+
+        <span class="c1"># Replace worst with elite</span>
+        <span class="n">worst_idx</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">fitnesses</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">fitnesses</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="n">X</span><span class="p">[</span><span class="n">worst_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">best_x</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">fitnesses</span><span class="p">[</span><span class="n">worst_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">best_f</span>
+
+        <span class="n">es</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">fitnesses</span><span class="p">)</span>
+        <span class="n">es</span><span class="o">.</span><span class="n">disp</span><span class="p">()</span>
+
+        <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">fitnesses</span><span class="p">):</span>
+            <span class="n">ind</span> <span class="o">=</span> <span class="n">_compile_individual</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">param_keys</span><span class="o">=</span><span class="n">initial_keys</span><span class="p">,</span>
+                                      <span class="n">param_ranges</span><span class="o">=</span><span class="n">param_ranges</span><span class="p">,</span> <span class="n">with_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            <span class="n">_log_inidividual</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">ind</span><span class="p">),</span> <span class="n">f</span><span class="p">,</span> <span class="n">gen_n</span><span class="p">)</span>
+
+        <span class="n">gen_n</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">gc</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+
+    <span class="n">res</span> <span class="o">=</span> <span class="n">es</span><span class="o">.</span><span class="n">result</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">_compile_individual</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">initial_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="n">param_ranges</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">return_only_best</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;hyperparams&quot;</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">res</span><span class="p">[</span><span class="mi">1</span><span class="p">]}</span>  <span class="c1"># best evaluated solution, its objective function value</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;hyperparams&quot;</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">res</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;es_data&quot;</span><span class="p">:</span> <span class="n">res</span><span class="p">[</span><span class="mi">2</span><span class="p">:]}</span>  <span class="c1"># full result</span></div>
+
+
+
+<span class="n">hyperparam_search_zoo</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;GridSearch&#39;</span><span class="p">:</span> <span class="n">perform_gridsearch</span><span class="p">,</span>
+    <span class="s1">&#39;CMA-ES&#39;</span><span class="p">:</span> <span class="n">cma_es</span>
+<span class="p">}</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

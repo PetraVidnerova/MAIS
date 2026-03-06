@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>engine_seirspluslike &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>engine_seirspluslike</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for engine_seirspluslike</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;SEIRS-Plus-Like continuous-time (Gillespie) simulation engine.</span>
+
+<span class="sd">This module defines :class:`SeirsPlusLikeEngine`, which extends</span>
+<span class="sd">:class:`~models.engine.BaseEngine` with a Gillespie-style event-driven</span>
+<span class="sd">simulation loop, network-contact propensity calculations, and contact-tracing</span>
+<span class="sd">helpers.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="k">as</span> <span class="nn">scipy</span>
+<span class="kn">import</span> <span class="nn">scipy.integrate</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
+<span class="kn">from</span> <span class="nn">utils.sparse_utils</span> <span class="kn">import</span> <span class="n">prop_of_row</span>
+<span class="kn">from</span> <span class="nn">models.engine</span> <span class="kn">import</span> <span class="n">BaseEngine</span>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine">[docs]</a>
+<span class="k">class</span> <span class="nc">SeirsPlusLikeEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Gillespie (continuous-time) epidemic engine for network models.</span>
+
+<span class="sd">    Extends :class:`~models.engine.BaseEngine` with:</span>
+
+<span class="sd">    * Propensity-based event selection (Gillespie algorithm).</span>
+<span class="sd">    * Network-aware contact probability calculations</span>
+<span class="sd">      (:meth:`prob_of_contact`, :meth:`num_contacts`).</span>
+<span class="sd">    * Built-in testing / contact-tracing scenario flags</span>
+<span class="sd">      (:meth:`update_scenario_flags`).</span>
+<span class="sd">    * Full time-series bookkeeping with automatic buffer extension.</span>
+
+<span class="sd">    Subclasses supply ``calc_propensities`` to define the concrete transition</span>
+<span class="sd">    rates.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.inicialization">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.inicialization">[docs]</a>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise model parameters and broadcast them to per-node arrays.</span>
+
+<span class="sd">        Reads constructor keyword arguments (falling back to per-parameter</span>
+<span class="sd">        defaults), seeds NumPy&#39;s RNG when a ``random_seed`` is given, calls</span>
+<span class="sd">        :meth:`update_graph` to build the adjacency matrix, and then</span>
+<span class="sd">        broadcasts every model parameter to a ``(num_nodes, 1)`` array.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">argdict</span> <span class="ow">in</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fixed_model_parameters</span><span class="p">,</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">common_arguments</span><span class="p">,</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">model_parameters</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">definition</span> <span class="ow">in</span> <span class="n">argdict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">definition</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span><span class="p">:</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span><span class="p">)</span>
+
+        <span class="c1"># setup adjacency matrix</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="p">)</span>
+
+        <span class="c1"># create arrays for model params</span>
+        <span class="k">for</span> <span class="n">param_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_parameters</span><span class="p">:</span>
+            <span class="n">param</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="fm">__getattribute__</span><span class="p">(</span><span class="n">param_name</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">param</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)):</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">,</span>
+                        <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">param</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">)))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">,</span>
+                        <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">fill_value</span><span class="o">=</span><span class="n">param</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">)))</span></div>
+
+            <span class="c1"># print(param_name, getattr(self, param_name))</span>
+<span class="c1">#        exit()</span>
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.setup_series_and_time_keeping">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.setup_series_and_time_keeping">[docs]</a>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create all time-series buffers for a SEIRS-Plus-like run.</span>
+
+<span class="sd">        Allocates :class:`~utils.history_utils.TimeSeries` objects for state</span>
+<span class="sd">        counts, state increments, population size, mean/median infection</span>
+<span class="sd">        probabilities, and the transition-event log.  Also initialises the</span>
+<span class="sd">        contact-history ring buffer.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">expected_num_transitions</span> <span class="o">=</span> <span class="mi">10</span>  <span class="c1"># TO: change to our situation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span> <span class="o">=</span> <span class="mi">301</span>
+        <span class="n">tseries_len</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_transitions</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">meaneprobs</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">medianeprobs</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span> <span class="o">=</span> <span class="n">TransitionHistory</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span> <span class="o">=</span> <span class="n">TransitionHistory</span><span class="p">(</span>
+            <span class="mi">1</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">s</span><span class="p">:</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="c1"># state_counts ... numbers of inidividuals in given states</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">state</span><span class="p">:</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">w_times</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_positive_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_qtests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">state</span><span class="p">:</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="c1"># self.propensities_repo = {</span>
+        <span class="c1">#     transition: TimeSeries(tseries_len, dtype=float)</span>
+        <span class="c1">#     for transition in self.transitions</span>
+        <span class="c1"># }</span>
+
+        <span class="c1"># N ... actual number of individuals in population</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">contact_history</span> <span class="o">=</span> <span class="n">ShortListSeries</span><span class="p">(</span><span class="mi">14</span><span class="p">)</span>
+
+        <span class="c1"># float time</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tmax</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># will be set when run() is called</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># time index to time series</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.states_and_counts_init">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.states_and_counts_init">[docs]</a>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise per-state node counts and the initial membership array.</span>
+
+<span class="sd">        Reads ``init_&lt;STATE_LABEL&gt;`` keyword arguments, assigns residual nodes</span>
+<span class="sd">        to the first state, randomly shuffles node assignments, and builds the</span>
+<span class="sd">        ``self.memberships`` integer array of shape</span>
+<span class="sd">        ``(num_states, num_nodes, 1)``.  Also zeroes ``durations``,</span>
+<span class="sd">        ``infect_start``, ``infect_time``, and ``test_waiting`` arrays.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">init_state_counts</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">s</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="k">for</span> <span class="n">state</span><span class="p">,</span> <span class="n">init_value</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_state_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">init_value</span>
+
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">init_state_counts</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="n">nodes_left</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">-</span> <span class="nb">sum</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">]</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">[</span><span class="mi">0</span><span class="p">]][</span><span class="mi">0</span><span class="p">]</span> <span class="o">+=</span> <span class="n">nodes_left</span>
+
+        <span class="c1"># invisible nodes does not count to population (death ones)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">-</span> <span class="nb">sum</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">invisible_states</span><span class="p">]</span>
+        <span class="p">)</span>
+
+        <span class="c1"># self.states_history[0] ... initial array of states</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">state</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="n">start</span><span class="p">:</span><span class="n">start</span><span class="o">+</span><span class="n">count</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+            <span class="n">start</span> <span class="o">+=</span> <span class="n">count</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># distribute the states randomly</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="c1">#        ecko = np.arange(self.num_nodes)[self.states_history[0] == 2]</span>
+<span class="c1">#        print(&quot;the winner is&quot;, ecko)</span>
+<span class="c1">#        exit()</span>
+
+        <span class="c1"># 0/1 num_states x num_nodes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">s</span>
+             <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">expand_dims</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="c1"># print(self.memberships.shape)</span>
+        <span class="c1"># print(np.all(self.memberships.sum(axis=0) == 1))</span>
+        <span class="c1"># print(self.memberships.sum(axis=1))</span>
+        <span class="c1"># exit()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">durations</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint16&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">infect_start</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint16&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">infect_time</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint16&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_waiting</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.node_degrees">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.node_degrees">[docs]</a>
+    <span class="k">def</span> <span class="nf">node_degrees</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Amat</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the degree of each node (sum of adjacency-matrix columns).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            Amat (scipy.sparse.csr_matrix): Adjacency matrix.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of shape ``(num_nodes, 1)``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">Amat</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.update_scenario_flags">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.update_scenario_flags">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_scenario_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Recompute ``testing_scenario`` and ``tracing_scenario`` flags.</span>
+
+<span class="sd">        These boolean attributes are used by ``calc_propensities`` to skip</span>
+<span class="sd">        expensive matrix operations when testing or tracing is inactive.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">testing_infected</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">theta_Ia</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">theta_Is</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_Ia</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_Is</span><span class="p">)</span>
+        <span class="n">positive_test_for_I</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">psi_Ia</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">psi_Is</span><span class="p">)</span>
+
+        <span class="n">testing_exposed</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">theta_E</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_E</span><span class="p">)</span>
+        <span class="n">positive_test_for_E</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">psi_E</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">testing_scenario</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="n">positive_test_for_I</span> <span class="ow">and</span> <span class="n">testing_infected</span><span class="p">)</span> <span class="ow">or</span>
+            <span class="p">(</span><span class="n">positive_test_for_E</span> <span class="ow">and</span> <span class="n">testing_exposed</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="n">tracing_E</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_E</span><span class="p">)</span>
+        <span class="n">tracing_I</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_Ia</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">phi_Is</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tracing_scenario</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="n">positive_test_for_E</span> <span class="ow">and</span> <span class="n">tracing_E</span><span class="p">)</span> <span class="ow">or</span>
+            <span class="p">(</span><span class="n">positive_test_for_I</span> <span class="ow">and</span> <span class="n">tracing_I</span><span class="p">)</span>
+        <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.num_contacts">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.num_contacts">[docs]</a>
+    <span class="k">def</span> <span class="nf">num_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return per-node contact counts from nodes in *state*.</span>
+
+<span class="sd">        Uses the membership arrays and the adjacency matrix to count how many</span>
+<span class="sd">        neighbours of each node are currently in *state*.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state (int or list of int): A single state code, or a list of</span>
+<span class="sd">                state codes whose contacts are summed.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Column vector of shape ``(num_nodes, 1)``.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            TypeException: If *state* is neither an ``int`` nor a ``list``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="o">==</span> <span class="nb">int</span><span class="p">:</span>
+            <span class="c1"># if TF_ENABLED:</span>
+            <span class="c1">#     with tf.device(&#39;/GPU:&#39; + &quot;0&quot;):</span>
+            <span class="c1">#         x = tf.Variable(self.X == state, dtype=&quot;float32&quot;)</span>
+            <span class="c1">#         return tf.sparse.sparse_dense_matmul(self.A, x)</span>
+            <span class="c1"># else:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+                <span class="n">scipy</span><span class="o">.</span><span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">state</span><span class="p">]))</span>
+
+        <span class="k">elif</span> <span class="nb">type</span><span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span><span class="p">:</span>
+            <span class="n">state_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">state</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">state</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+            <span class="c1"># if TF_ENABLED:</span>
+            <span class="c1">#     with tf.device(&#39;/GPU:&#39; + &quot;0&quot;):</span>
+            <span class="c1">#         x = tf.Variable(state_flags, dtype=&quot;float32&quot;)</span>
+            <span class="c1">#         nums = tf.sparse.sparse_dense_matmul(self.A, x)</span>
+            <span class="c1"># else:</span>
+            <span class="n">nums</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">state_flags</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">nums</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">TypeException</span><span class="p">(</span>
+                <span class="s2">&quot;num_contacts(state) accepts str or list of strings&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.prob_of_contact">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.prob_of_contact">[docs]</a>
+    <span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute per-node probability of becoming newly exposed via network contacts.</span>
+
+<span class="sd">        Stochastically activates edges between *source_candidate_states* and</span>
+<span class="sd">        *dest_candidate_states*, records active contacts, then computes for</span>
+<span class="sd">        each node in *source_states* the probability of being exposed by at</span>
+<span class="sd">        least one neighbour in *dest_states*.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            source_states (list of int): States that can become exposed.</span>
+<span class="sd">            source_candidate_states (list of int): Candidate source states</span>
+<span class="sd">                (superset of *source_states*) used for edge selection.</span>
+<span class="sd">            dest_states (list of int): Infectious states.</span>
+<span class="sd">            dest_candidate_states (list of int): Candidate destination states</span>
+<span class="sd">                (superset of *dest_states*) used for edge selection.</span>
+<span class="sd">            beta (numpy.ndarray): Per-node transmission rate, shape</span>
+<span class="sd">                ``(num_nodes, 1)``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Per-node exposure probability, shape</span>
+<span class="sd">            ``(num_nodes, 1)``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1">#        print(states)</span>
+        <span class="c1"># for i in states:</span>
+        <span class="c1">#    print(self.current_state_count(i))</span>
+        <span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">dest_states</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span> <span class="ow">and</span> <span class="nb">type</span><span class="p">(</span><span class="n">source_states</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span>
+        <span class="n">source_candidate_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_candidate_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">source_candidate_states</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">source_candidate_indices</span> <span class="o">=</span> <span class="n">source_candidate_flags</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">dest_candidate_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_candidate_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">dest_candidate_states</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">dest_candidate_indices</span> <span class="o">=</span> <span class="n">dest_candidate_flags</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">vysek</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">A</span><span class="p">[</span><span class="n">source_candidate_flags</span> <span class="o">==</span>
+                       <span class="mi">1</span><span class="p">,</span> <span class="p">:][:,</span> <span class="n">dest_candidate_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">vysek</span><span class="o">.</span><span class="n">eliminate_zeros</span><span class="p">()</span>
+        <span class="c1">#        print(vysek.shape)</span>
+        <span class="k">if</span> <span class="n">vysek</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">vysek</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="c1"># for each active edge flip coin</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">vysek</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+        <span class="c1"># set to 0/1 according the coin</span>
+        <span class="n">vysek</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="p">(</span><span class="n">vysek</span><span class="o">.</span><span class="n">data</span> <span class="o">&gt;</span> <span class="n">r</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">contact_indices</span> <span class="o">=</span> <span class="n">vysek</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()</span>
+        <span class="c1"># print(source_candidate_indices, contact_indices[0])</span>
+        <span class="c1"># print(source_candidate_indices[contact_indices[0]])</span>
+        <span class="c1"># covert vysek indicies to node numbers</span>
+        <span class="n">active_dest_indices</span> <span class="o">=</span> <span class="n">dest_candidate_indices</span><span class="p">[</span><span class="n">contact_indices</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="n">active_source_indices</span> <span class="o">=</span> <span class="n">source_candidate_indices</span><span class="p">[</span><span class="n">contact_indices</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
+        <span class="n">contact_indices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">active_dest_indices</span><span class="p">,</span> <span class="n">active_source_indices</span><span class="p">))</span>
+        <span class="c1"># the first element of couple is the infected one !</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">contact_history</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contact_indices</span><span class="p">)</span>
+        <span class="c1">#        print(&quot;--&gt;&quot;, self.contact_history.values)</span>
+
+        <span class="c1"># print(contact_indices)</span>
+        <span class="n">dest_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">dest_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">dest_states</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">source_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">source_states</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">source_states</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">A_actual</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">active_source_indices</span><span class="p">)),</span>
+             <span class="p">(</span><span class="n">active_source_indices</span><span class="p">,</span> <span class="n">active_dest_indices</span><span class="p">)),</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">A_actual</span> <span class="o">=</span> <span class="n">A_actual</span><span class="p">[</span><span class="n">source_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span> <span class="p">:][:,</span> <span class="n">dest_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">A_actual</span><span class="o">.</span><span class="n">eliminate_zeros</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">A_actual</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">A_actual</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">beta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="n">beta</span><span class="p">[</span><span class="n">dest_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">ravel</span><span class="p">(),</span>
+                       <span class="p">(</span><span class="n">A_actual</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">not_prob_contact</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">sparse</span><span class="o">.</span><span class="n">csr_matrix</span><span class="p">(</span><span class="n">A_actual</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">beta</span><span class="p">))</span>
+        <span class="k">del</span> <span class="n">A_actual</span>
+        <span class="n">not_prob_contact</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">not_prob_contact</span><span class="o">.</span><span class="n">data</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">source_flags</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">prop_of_row</span><span class="p">(</span><span class="n">not_prob_contact</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+
+        <span class="c1"># if False:</span>
+        <span class="c1">#     source_flags = self.memberships[source_states, :, :].reshape(</span>
+        <span class="c1">#         len(source_states), self.num_nodes).sum(axis=0)</span>
+        <span class="c1">#     #        print(&quot;state flags&quot;, state_flags.shape)</span>
+        <span class="c1">#     #        print(self.node_ids[state_flags == 1])</span>
+        <span class="c1">#     dest_flags = self.memberships[dest_states, :, :].reshape(</span>
+        <span class="c1">#         len(dest_states), self.num_nodes).sum(axis=0)</span>
+
+        <span class="c1">#     vysek = self.A[source_flags == 1, :][:, dest_flags == 1]</span>
+        <span class="c1">#     vysek.eliminate_zeros()</span>
+        <span class="c1">#     #        print(vysek.shape)</span>
+        <span class="c1">#     if vysek.shape[0] == 0:</span>
+        <span class="c1">#         return np.zeros((self.num_nodes, 1))</span>
+        <span class="c1">#     not_prob_contact = scipy.sparse.csr_matrix(vysek)</span>
+        <span class="c1">#     assert np.all(not_prob_contact.data &gt;= 0) and np.all(</span>
+        <span class="c1">#         not_prob_contact.data &lt;= 1)</span>
+        <span class="c1">#     #        print(not_prob_contact)</span>
+        <span class="c1">#     beta = np.tile(beta[dest_flags == 1].ravel(),</span>
+        <span class="c1">#                    (not_prob_contact.shape[0], 1))</span>
+        <span class="c1">#     # print(not_prob_contact.shape, beta.shape)</span>
+        <span class="c1">#     not_prob_contact = scipy.sparse.csr_matrix(</span>
+        <span class="c1">#         not_prob_contact.multiply(beta))</span>
+        <span class="c1">#     not_prob_contact.data = 1.0 - not_prob_contact.data</span>
+        <span class="c1">#     # print(&quot;**** == 1&quot;, np.all(not_prob_contact.data == 1))</span>
+        <span class="c1">#     # print(&quot;**** prop columns&quot;, prop_of_column(not_prob_contact), np.all(prop_of_column(not_prob_contact)==1))</span>
+        <span class="c1">#     # print(&quot;*** contact &quot;,  1 - prop_of_column(not_prob_contact))</span>
+        <span class="c1">#     result = np.zeros(self.num_nodes)</span>
+        <span class="c1">#     # print((1 - prop_of_row(not_prob_contact)).shape, result.shape,</span>
+        <span class="c1">#     #      result[source_flags == 1].shape)</span>
+        <span class="c1">#     result[source_flags == 1] = 1 - prop_of_row(not_prob_contact)</span>
+        <span class="c1">#     return result.reshape(self.num_nodes, 1)</span>
+
+        <span class="c1"># not_prob_contact = prob_contact</span>
+        <span class="c1"># not_prob_contact.data = 1.0 - not_prob_contact.data</span>
+        <span class="c1">#  product over columns</span>
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.current_state_count">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.current_state_count">[docs]</a>
+    <span class="k">def</span> <span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the count of nodes in *state* at the current time index.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state (int): State code.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Current count.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.current_N">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.current_N">[docs]</a>
+    <span class="k">def</span> <span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the current effective population size.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            float: Population size at the current time index (excludes</span>
+<span class="sd">            invisible states).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.increase_data_series_length">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.increase_data_series_length">[docs]</a>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend time-series and transition-history buffers.</span>
+
+<span class="sd">        Called automatically by :meth:`run_iteration` when storage is nearly</span>
+<span class="sd">        exhausted.  Calls ``bloat()`` on all relevant</span>
+<span class="sd">        :class:`~utils.history_utils.TimeSeries` objects.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">expected_num_transitions</span> <span class="o">=</span> <span class="mi">10</span>  <span class="c1"># TO: change to our situation</span>
+        <span class="n">tseries_len</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_transitions</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">)</span>
+        <span class="c1"># for tran in self.transitions:</span>
+        <span class="c1">#     self.propensities_repo[tran].bloat(tseries_len)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="o">.</span><span class="n">bloat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">expected_num_days</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.finalize_data_series">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.finalize_data_series">[docs]</a>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually consumed length.</span>
+
+<span class="sd">        Called at the end of a run.  Invokes ``finalize(self.tidx)`` on</span>
+<span class="sd">        ``self.tseries``, ``self.history``, all state-count / state-increment</span>
+<span class="sd">        series, and ``self.N``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_incrementss</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.save">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.save">[docs]</a>
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the simulation time-series to a CSV file.</span>
+
+<span class="sd">        Assembles per-state counts and increments, saves them using the</span>
+<span class="sd">        floating-point event time as the index.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            file_or_filename (str or file-like): Destination path or open</span>
+<span class="sd">                file object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span>
+        <span class="n">col_increments</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;inc_&quot;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">x</span><span class="p">]:</span> <span class="n">col_inc</span>
+            <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">col_inc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span>
+        <span class="p">}</span>
+        <span class="n">col_states</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_str_dic</span><span class="p">[</span><span class="n">x</span><span class="p">]:</span> <span class="n">count</span>
+            <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span>
+        <span class="p">}</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">col_states</span><span class="p">,</span> <span class="o">**</span><span class="n">col_increments</span><span class="p">}</span>
+        <span class="n">columns</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">file_or_filename</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">df</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.run_iteration">[docs]</a>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one Gillespie step: select and apply one state transition.</span>
+
+<span class="sd">        Uses the propensities returned by ``calc_propensities`` to sample the</span>
+<span class="sd">        next event time (exponential distribution) and the next transition</span>
+<span class="sd">        (multinomial selection).  Updates memberships, state-count time-series,</span>
+<span class="sd">        and the transition history.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: ``True`` if the simulation should continue; ``False`` if the</span>
+<span class="sd">            maximum time has been reached or no further transitions are</span>
+<span class="sd">            possible.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">):</span>
+            <span class="c1"># Room has run out in the timeseries storage arrays; double the size of these arrays</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+
+        <span class="c1"># 1. Generate 2 random numbers uniformly distributed in (0,1)</span>
+        <span class="n">r1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+        <span class="n">r2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+
+        <span class="c1"># 2. Calculate propensities</span>
+        <span class="n">propensities</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">calc_propensities</span><span class="p">())</span>
+        <span class="n">transition_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transitions</span>
+        <span class="n">alpha</span> <span class="o">=</span> <span class="n">propensities</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+        <span class="c1"># Terminate when probability of all events is 0:</span>
+        <span class="k">if</span> <span class="n">alpha</span> <span class="o">&lt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="c1"># 3. Calculate alpha</span>
+        <span class="n">propensities</span> <span class="o">=</span> <span class="n">propensities</span><span class="o">.</span><span class="n">ravel</span><span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="s2">&quot;F&quot;</span><span class="p">)</span>
+        <span class="n">cumsum</span> <span class="o">=</span> <span class="n">propensities</span><span class="o">.</span><span class="n">cumsum</span><span class="p">()</span>
+
+        <span class="c1"># 4. Compute the time until the next event takes place</span>
+        <span class="n">tau</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">alpha</span><span class="p">)</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="n">r1</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">+=</span> <span class="n">tau</span>
+
+        <span class="c1"># 5. Compute which event takes place</span>
+        <span class="n">transition_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">cumsum</span><span class="p">,</span> <span class="n">r2</span><span class="o">*</span><span class="n">alpha</span><span class="p">)</span>
+        <span class="n">transition_node</span> <span class="o">=</span> <span class="n">transition_idx</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+        <span class="n">transition_type</span> <span class="o">=</span> <span class="n">transition_types</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">transition_idx</span><span class="o">/</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)]</span>
+
+        <span class="c1"># 6. Update node states and data series</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Assertion error: Node </span><span class="si">{</span><span class="n">transition_node</span><span class="si">}</span><span class="s2"> has unexpected current state, given the intended transition of </span><span class="si">{</span><span class="n">transition_type</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">transition_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">transition_node</span><span class="p">,</span> <span class="o">*</span><span class="n">transition_type</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">0</span><span class="p">]][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">]][</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="c1"># if node died</span>
+        <span class="k">if</span> <span class="n">transition_type</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">invisible_states</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span>
+
+        <span class="c1"># Terminate if tmax reached or num infectious and num exposed is 0:</span>
+        <span class="n">numI</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+                    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">unstable_states</span>
+                    <span class="p">])</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tmax</span> <span class="ow">or</span> <span class="n">numI</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="SeirsPlusLikeEngine.run">
+<a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the Gillespie simulation for up to *T* time units.</span>
+
+<span class="sd">        Loops over :meth:`run_iteration` until the simulation terminates or</span>
+<span class="sd">        *T* is exhausted.  Fires ``self.periodic_update_callback`` at each</span>
+<span class="sd">        midnight and optionally prints progress.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            T (int or float): Number of time units to simulate.</span>
+<span class="sd">            print_interval (int, optional): Print status every this many</span>
+<span class="sd">                simulated days. Set to ``0`` or negative to suppress all</span>
+<span class="sd">                output. Defaults to ``10``.</span>
+<span class="sd">            verbose (bool, optional): If ``True``, include per-state counts in</span>
+<span class="sd">                progress output. Defaults to ``False``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: ``True`` on successful completion, ``False`` if *T* &lt;= 0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">T</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tmax</span> <span class="o">+=</span> <span class="n">T</span>
+
+        <span class="n">running</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">day</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+            <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+        <span class="k">while</span> <span class="n">running</span><span class="p">:</span>
+
+            <span class="n">running</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span>
+
+            <span class="c1"># true after the first event after midnight</span>
+            <span class="n">day_changed</span> <span class="o">=</span> <span class="n">day</span> <span class="o">!=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="n">day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">day_changed</span> <span class="ow">and</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+                <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Last day took: &quot;</span><span class="p">,</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">,</span> <span class="s2">&quot;seconds&quot;</span><span class="p">)</span>
+                <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+            <span class="c1"># run periodical update</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span> <span class="ow">and</span> <span class="n">day</span> <span class="o">!=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">day_changed</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="p">)</span>
+                <span class="n">changes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">history</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="s2">&quot;graph&quot;</span> <span class="ow">in</span> <span class="n">changes</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;CHANGING GRAPH&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">update_graph</span><span class="p">(</span><span class="n">changes</span><span class="p">[</span><span class="s2">&quot;graph&quot;</span><span class="p">])</span>
+
+            <span class="c1"># ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</span>
+            <span class="c1"># print only if print_interval is set</span>
+            <span class="c1"># prints always at the beginning of a new day</span>
+            <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">running</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">day_changed</span><span class="p">:</span>
+                    <span class="n">day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">running</span> <span class="ow">or</span> <span class="p">(</span><span class="n">day_changed</span> <span class="ow">and</span> <span class="p">(</span><span class="n">day</span> <span class="o">%</span> <span class="n">print_interval</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)):</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;t = </span><span class="si">%.2f</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">verbose</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">running</span><span class="p">:</span>
+                        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\t</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="si">}</span><span class="s2"> = </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">state</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="kc">True</span>
+
+        <span class="k">pass</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

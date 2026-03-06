@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>run_search &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>run_search</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for run_search</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Command-line script for hyperparameter search on MAIS epidemic models.</span>
+
+<span class="sd">Loads a model configuration and a hyperparameter search configuration (JSON),</span>
+<span class="sd">then runs the selected search method (grid search or CMA-ES) to minimise a</span>
+<span class="sd">specified loss function (RMSE, MAE, or R²) against observed gold data.</span>
+
+<span class="sd">Typical usage::</span>
+
+<span class="sd">    python run_search.py config.ini gridsearch.json \\</span>
+<span class="sd">        --fit_data ../data/fit_data/fit_me.csv \\</span>
+<span class="sd">        --return_func rmse --n_jobs 4</span>
+
+<span class="sd">Results are saved as a CSV file in the directory specified by ``--out_dir``.</span>
+<span class="sd">An optional evolution log can be written with ``-l``.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">timeit</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">click</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s1">&#39;../src&#39;</span><span class="p">))</span>
+
+<span class="kn">from</span> <span class="nn">hyperparam_search.hyperparam_utils</span> <span class="kn">import</span> <span class="n">run_hyperparam_search</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+
+
+<div class="viewcode-block" id="load_gold_data">
+<a class="viewcode-back" href="../scripts.html#run_search.load_gold_data">[docs]</a>
+<span class="k">def</span> <span class="nf">load_gold_data</span><span class="p">(</span><span class="n">csv_path</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">data_column</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">from_day</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">until_day</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_dates</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load and pre-process observed (gold) data for model fitting.</span>
+
+<span class="sd">    Reads a CSV file, aligns its time index, optionally pads the beginning</span>
+<span class="sd">    with zero-valued rows, and returns a DataFrame with ``&quot;day&quot;`` and</span>
+<span class="sd">    ``&quot;infected&quot;`` columns sliced to the requested day range.</span>
+
+<span class="sd">    Forward-fill is applied to handle any missing values in the data column.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        csv_path (str): Path to the CSV file containing observed data.  The</span>
+<span class="sd">            file must have either a ``&quot;datum&quot;`` column (parsed as dates when</span>
+<span class="sd">            ``use_dates=True``) or a ``&quot;T&quot;`` column with day indices.</span>
+<span class="sd">        first_n_zeros (int): Number of zero-valued days to prepend.  The</span>
+<span class="sd">            existing day indices are shifted by this value.  Defaults to ``0``.</span>
+<span class="sd">        data_column (int or str): Either the integer column position (0-based)</span>
+<span class="sd">            or the string column name of the observed values.  Defaults to</span>
+<span class="sd">            ``2``.</span>
+<span class="sd">        from_day (int): First row index (0-based) to include after all</span>
+<span class="sd">            pre-processing.  Defaults to ``0``.</span>
+<span class="sd">        until_day (int or None): Exclusive upper row index.  ``None`` means</span>
+<span class="sd">            include all remaining rows.  Defaults to ``None``.</span>
+<span class="sd">        use_dates (bool): If ``True``, derive day indices from the ``&quot;datum&quot;``</span>
+<span class="sd">            column (parsed as dates, with day 0 = the first date).  Otherwise</span>
+<span class="sd">            use the ``&quot;T&quot;`` column.  Defaults to ``False``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pandas.DataFrame: DataFrame with columns ``&quot;day&quot;`` (int) and</span>
+<span class="sd">        ``&quot;infected&quot;`` (float), sliced to ``[from_day, until_day)``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">csv_path</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">use_dates</span><span class="p">:</span>
+        <span class="n">dates</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;datum&quot;</span><span class="p">])</span>
+        <span class="n">dates</span> <span class="o">=</span> <span class="n">dates</span> <span class="o">-</span> <span class="n">dates</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">dates</span> <span class="o">=</span> <span class="n">dates</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">days</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">dates</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">]</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;day&quot;</span><span class="p">:</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">dates</span><span class="p">)),</span> <span class="s2">&quot;infected&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">})</span>
+
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data_column</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="n">data_vals</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:,</span> <span class="n">data_column</span><span class="p">]</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">data_vals</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">data_column</span><span class="p">]</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;infected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">data_vals</span>
+
+    <span class="c1">#result.fillna(method=&#39;ffill&#39;, inplace=True)</span>
+    <span class="n">result</span><span class="o">.</span><span class="n">ffill</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">first_n_zeros</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">result</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">+=</span> <span class="n">first_n_zeros</span>
+
+        <span class="n">first_n</span> <span class="o">=</span> <span class="p">[{</span><span class="s2">&quot;day&quot;</span><span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;infected&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">}</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">first_n_zeros</span><span class="p">)]</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">first_n</span><span class="p">),</span> <span class="n">result</span><span class="p">],</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">from_day</span><span class="p">:</span><span class="n">until_day</span><span class="p">]</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<span class="nd">@click</span><span class="o">.</span><span class="n">command</span><span class="p">()</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;filename&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;town0.ini&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;hyperparam_filename&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;example_gridsearch.json&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--set-random-seed/--no-random-seed&#39;</span><span class="p">,</span> <span class="s1">&#39; /-r&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+              <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Random seed to set for the experiment. If `run_n_times` &gt; 1, the seed is incremented by i for &quot;</span>
+                   <span class="s2">&quot;the i-th run.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--n_jobs&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--from_day&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Lower bound for days in the gold data DataFrame (indexed from 0).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--until_day&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Upper bound for days in the gold data DataFrame &quot;</span>
+                                                          <span class="s2">&quot;(python-like indexing - elements up to &#39;until_day - 1&#39; are &quot;</span>
+                                                          <span class="s2">&quot;selected).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--use_dates/--use_T&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;If True, use column &#39;datum&#39; for gold data indexing, else use &quot;</span>
+                                                         <span class="s2">&quot;column &#39;T&#39; (default).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--use_config_days/--use_args_days&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;If True, use &#39;start_day&#39; and &#39;n_days&#39; from &quot;</span>
+                                                                       <span class="s2">&quot;the config file, otherwise using &#39;from_day&#39; &quot;</span>
+                                                                       <span class="s2">&quot;and &#39;until_day&#39; command line arguments.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--run_n_times&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Number of times to run th experiment with specific hyperparameter &quot;</span>
+                                               <span class="s2">&quot;settings.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--first_n_zeros&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Shifts gold data by this value - the first day is incremented&quot;</span>
+                                                 <span class="s2">&quot; by `first_n_zeros`, and the data is padded with `first_n_zeros` days&quot;</span>
+                                                 <span class="s2">&quot; with the gold values set to zero.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--fit_column&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;I_d&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Data column to use for fit.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--fit_data&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;../data/fit_data/fit_me.csv&#39;</span><span class="p">,</span>
+              <span class="n">help</span><span class="o">=</span><span class="s2">&quot;A DataFrame that has a column named &#39;datum&#39; and contains the gold data in the column `data_column`.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--return_func&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;rmse&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Loss function.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--log_csv_file/--no_log_csv&#39;</span><span class="p">,</span> <span class="s1">&#39;-l/ &#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--out_dir&#39;</span><span class="p">,</span>  <span class="n">default</span><span class="o">=</span><span class="sa">f</span><span class="s1">&#39;./search_</span><span class="si">{</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2">_%H%M%S&quot;</span><span class="p">)</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">hyperparam_filename</span><span class="p">,</span> <span class="n">set_random_seed</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">from_day</span><span class="p">,</span> <span class="n">until_day</span><span class="p">,</span> <span class="n">use_dates</span><span class="p">,</span> <span class="n">use_config_days</span><span class="p">,</span>
+        <span class="n">run_n_times</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">,</span> <span class="n">fit_data</span><span class="p">,</span> <span class="n">return_func</span><span class="p">,</span> <span class="n">log_csv_file</span><span class="p">,</span> <span class="n">out_dir</span><span class="p">):</span>
+
+    <span class="n">random_seed</span> <span class="o">=</span> <span class="mi">42</span> <span class="k">if</span> <span class="n">set_random_seed</span> <span class="k">else</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10000</span><span class="p">)</span>
+
+    <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+    <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Output directory for results: </span><span class="si">{</span><span class="n">out_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running with n_jobs == </span><span class="si">{</span><span class="n">n_jobs</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">search_func</span><span class="p">():</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">data_col</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">fit_column</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">data_col</span> <span class="o">=</span> <span class="n">fit_column</span>
+
+        <span class="n">gold_data</span> <span class="o">=</span> <span class="n">load_gold_data</span><span class="p">(</span><span class="n">fit_data</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="o">=</span><span class="n">first_n_zeros</span><span class="p">,</span> <span class="n">data_column</span><span class="o">=</span><span class="n">data_col</span><span class="p">,</span> <span class="n">use_dates</span><span class="o">=</span><span class="n">use_dates</span><span class="p">,</span>
+                                   <span class="n">from_day</span><span class="o">=</span><span class="n">from_day</span><span class="p">,</span> <span class="n">until_day</span><span class="o">=</span><span class="n">until_day</span><span class="p">)</span>
+
+        <span class="c1"># infer start day and experiment length from gold data</span>
+        <span class="n">start_day</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">use_config_days</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">gold_data</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;day&quot;</span><span class="p">])</span>
+        <span class="n">n_days</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">use_config_days</span> <span class="k">else</span> <span class="nb">len</span><span class="p">(</span><span class="n">gold_data</span><span class="p">)</span>
+
+        <span class="n">gold_data</span> <span class="o">=</span> <span class="n">gold_data</span><span class="p">[</span><span class="s2">&quot;infected&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">out_dir</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">out_dir</span><span class="p">)</span>
+
+        <span class="n">results</span> <span class="o">=</span> <span class="n">run_hyperparam_search</span><span class="p">(</span>
+            <span class="n">filename</span><span class="p">,</span>
+            <span class="n">hyperparam_filename</span><span class="p">,</span>
+            <span class="n">model_random_seed</span><span class="o">=</span><span class="n">random_seed</span><span class="p">,</span>
+            <span class="n">n_jobs</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span>
+            <span class="n">start_day</span><span class="o">=</span><span class="n">start_day</span><span class="p">,</span>
+            <span class="n">n_days</span><span class="o">=</span><span class="n">n_days</span><span class="p">,</span>
+            <span class="n">return_func</span><span class="o">=</span><span class="n">return_func</span><span class="p">,</span>
+            <span class="n">return_func_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;y_true&quot;</span><span class="p">:</span> <span class="n">gold_data</span><span class="p">,</span> <span class="s2">&quot;fit_column&quot;</span><span class="p">:</span> <span class="n">fit_column</span><span class="p">},</span>
+            <span class="n">run_n_times</span><span class="o">=</span><span class="n">run_n_times</span><span class="p">,</span>
+            <span class="n">output_file</span><span class="o">=</span><span class="n">out_dir</span> <span class="o">+</span> <span class="s1">&#39;/evo_log.csv&#39;</span> <span class="k">if</span> <span class="n">log_csv_file</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">results</span> <span class="o">=</span> <span class="p">[</span><span class="n">results</span><span class="p">]</span>
+
+        <span class="n">res_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">res</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+            <span class="n">mean_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;result&#39;</span><span class="p">])</span>
+
+            <span class="n">res_row</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">res</span><span class="p">[</span><span class="s2">&quot;hyperparams&quot;</span><span class="p">],</span> <span class="sa">f</span><span class="s2">&quot;mean_</span><span class="si">{</span><span class="n">return_func</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">mean_val</span><span class="p">}</span>
+            <span class="n">res_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">res_row</span><span class="p">)</span>
+
+        <span class="n">fit_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">fit_data</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">search_method</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">hyperparam_filename</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">res_list</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">search_method</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">return_func</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">fit_name</span><span class="si">}</span><span class="s1">_seed=</span><span class="si">{</span><span class="n">random_seed</span><span class="si">}</span><span class="s1">.csv&#39;</span><span class="p">))</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">timeit</span><span class="o">.</span><span class="n">timeit</span><span class="p">(</span><span class="n">search_func</span><span class="p">,</span> <span class="n">number</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run</span><span class="p">()</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

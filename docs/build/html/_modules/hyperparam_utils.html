@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>hyperparam_utils &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>hyperparam_utils</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for hyperparam_utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;High-level utilities for running hyperparameter searches on epidemic models.</span>
+
+<span class="sd">This module acts as the entry-point for hyperparameter optimisation workflows.</span>
+<span class="sd">It loads model and search configurations from disk, wires together the model</span>
+<span class="sd">runner with the chosen search method (grid search, CMA-ES, …), and exposes</span>
+<span class="sd">``run_hyperparam_search`` as the primary public API.</span>
+
+<span class="sd">Internal helpers handle model duplication, parameter pre-processing (e.g.</span>
+<span class="sd">``theta`` expansion, ``beta_A`` derivation from ``a_reduction``), and</span>
+<span class="sd">selection of a return/loss function from ``eval_model.return_func_zoo``.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span>
+
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+<span class="kn">from</span> <span class="nn">hyperparam_search.eval_model</span> <span class="kn">import</span> <span class="n">return_func_zoo</span>
+<span class="kn">from</span> <span class="nn">hyperparam_search.search_methods</span> <span class="kn">import</span> <span class="n">hyperparam_search_zoo</span>
+<span class="kn">from</span> <span class="nn">model_m.model_m</span> <span class="kn">import</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
+
+
+<div class="viewcode-block" id="run_hyperparam_search">
+<a class="viewcode-back" href="../src_modules.html#hyperparam_utils.run_hyperparam_search">[docs]</a>
+<span class="k">def</span> <span class="nf">run_hyperparam_search</span><span class="p">(</span><span class="n">model_config</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+                          <span class="n">hyperparam_config</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+                          <span class="n">model_random_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+                          <span class="n">run_n_times</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+                          <span class="n">start_day</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                          <span class="n">n_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                          <span class="n">return_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                          <span class="n">return_func_kwargs</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                          <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run hyperparameter search on a model loaded from config.</span>
+
+<span class="sd">    Hyperparameters specified in ``hyperparam_config`` overwrite those in</span>
+<span class="sd">    ``model_config``.  The search method is also defined in</span>
+<span class="sd">    ``hyperparam_config``.</span>
+
+<span class="sd">    A single model run returns the model as a whole.  If only a subset of</span>
+<span class="sd">    information is to be extracted, pass ``return_func`` – a string key that</span>
+<span class="sd">    selects a specific metric function from ``eval_model.return_func_zoo``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model_config (str): Path to the model configuration file (INI format).</span>
+<span class="sd">        hyperparam_config (str): Path to the hyperparameter search</span>
+<span class="sd">            configuration file (JSON format).</span>
+<span class="sd">        model_random_seed (int): Initial random seed for every model.</span>
+<span class="sd">            Defaults to ``42``.</span>
+<span class="sd">        run_n_times (int): For a single model (with specific hyperparams),</span>
+<span class="sd">            repeat the run multiple times.  The random seed for the i-th run</span>
+<span class="sd">            is set to ``model_random_seed + i``.  Defaults to ``1``.</span>
+<span class="sd">        start_day (int or None): Starting day for the experiment.  If</span>
+<span class="sd">            ``None``, ``start_day`` from the model config is used.</span>
+<span class="sd">        n_days (int or None): Number of days to run the experiment.  If</span>
+<span class="sd">            ``None``, ``duration`` from the model config (or ``60`` if not</span>
+<span class="sd">            set) is used.</span>
+<span class="sd">        return_func (str or None): String key of the return/loss function</span>
+<span class="sd">            from ``eval_model.return_func_zoo``.  ``None`` returns the model</span>
+<span class="sd">            object itself.</span>
+<span class="sd">        return_func_kwargs (Dict or None): Additional keyword arguments</span>
+<span class="sd">            forwarded to the return function selected by ``return_func``.</span>
+<span class="sd">        **kwargs: Additional keyword arguments forwarded to the hyperparameter</span>
+<span class="sd">            search function (interpretation is method-specific).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Result of hyperparameter optimisation, specific to the chosen search</span>
+<span class="sd">        method (e.g. a list of dicts for grid search, or a single best-params</span>
+<span class="sd">        dict for CMA-ES).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+    <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">model_config</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">start_day</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">cf</span><span class="o">.</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;MODEL&#39;</span><span class="p">][</span><span class="s1">&#39;start_day&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">start_day</span><span class="p">)</span>
+
+    <span class="n">graph</span> <span class="o">=</span> <span class="n">load_graph</span><span class="p">(</span><span class="n">cf</span><span class="p">)</span>
+    <span class="n">base_model</span> <span class="o">=</span> <span class="n">load_model_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="p">,</span> <span class="n">preloaded_graph</span><span class="o">=</span><span class="n">graph</span><span class="p">)</span>
+
+    <span class="c1"># wrapper for running one model same time with different seed</span>
+    <span class="n">model_load_func</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_run_models_from_config</span><span class="p">,</span>
+                              <span class="n">cf</span><span class="p">,</span>
+                              <span class="n">preloaded_graph</span><span class="o">=</span><span class="n">graph</span><span class="p">,</span>
+                              <span class="n">preloaded_model</span><span class="o">=</span><span class="n">base_model</span><span class="p">,</span>
+                              <span class="n">model_random_seed</span><span class="o">=</span><span class="n">model_random_seed</span><span class="p">,</span>
+                              <span class="n">run_n_times</span><span class="o">=</span><span class="n">run_n_times</span><span class="p">,</span>
+                              <span class="n">n_days</span><span class="o">=</span><span class="n">n_days</span><span class="p">,</span>
+                              <span class="n">return_func</span><span class="o">=</span><span class="n">return_func</span><span class="p">,</span>
+                              <span class="n">return_func_kwargs</span><span class="o">=</span><span class="n">return_func_kwargs</span><span class="p">)</span>
+
+    <span class="n">hyperparam_search_func</span> <span class="o">=</span> <span class="n">_init_hyperparam_search</span><span class="p">(</span><span class="n">hyperparam_config</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">hyperparam_search_func</span><span class="p">(</span><span class="n">model_func</span><span class="o">=</span><span class="n">model_load_func</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="run_single_model">
+<a class="viewcode-back" href="../src_modules.html#hyperparam_utils.run_single_model">[docs]</a>
+<span class="k">def</span> <span class="nf">run_single_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run a single model for ``T`` days and return it.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: A ``ModelM`` instance that is ready to be run (or will be set</span>
+<span class="sd">            up automatically on the first call to ``model.run``).</span>
+<span class="sd">        T (int): Number of simulation days.</span>
+<span class="sd">        print_interval (int): How often (in days) to print a progress summary.</span>
+<span class="sd">            Defaults to ``10``.</span>
+<span class="sd">        verbose (bool): Whether to print detailed per-step output.</span>
+<span class="sd">            Defaults to ``False``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        ModelM: The same ``model`` object after simulation has completed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">T</span><span class="o">=</span><span class="n">T</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_run_models_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">:</span> <span class="n">ConfigFile</span><span class="p">,</span>
+                            <span class="n">preloaded_graph</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                            <span class="n">preloaded_model</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                            <span class="n">hyperparams</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                            <span class="n">model_random_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+                            <span class="n">run_n_times</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+                            <span class="n">n_days</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                            <span class="n">return_func</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+                            <span class="n">return_func_kwargs</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run the model (possibly multiple times) with a specific set of hyperparameters.</span>
+
+<span class="sd">    This is the inner callable that is partially applied by</span>
+<span class="sd">    ``run_hyperparam_search`` and then passed to the search method.  It</span>
+<span class="sd">    handles a handful of model-specific parameter transformations before</span>
+<span class="sd">    constructing or duplicating the model:</span>
+
+<span class="sd">    * ``theta`` is expanded into ``theta_E``, ``theta_Ia``, and ``theta_In``.</span>
+<span class="sd">    * ``a_reduction`` is converted to ``beta_A = beta * a_reduction``.</span>
+<span class="sd">    * ``beta`` / ``beta_A`` are mirrored into their ``*_in_family`` variants.</span>
+<span class="sd">    * Keys starting with ``policy_`` are stripped of their prefix and forwarded</span>
+<span class="sd">      to the policy constructor.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cf (ConfigFile): Loaded configuration object for the model.</span>
+<span class="sd">        preloaded_graph: Pre-built graph object to avoid reloading from disk.</span>
+<span class="sd">            Pass ``None`` to load from config.</span>
+<span class="sd">        preloaded_model: A ``ModelM`` instance to duplicate instead of</span>
+<span class="sd">            constructing a new model from scratch.  Pass ``None`` to build</span>
+<span class="sd">            from config.</span>
+<span class="sd">        hyperparams (Dict): Dictionary of hyperparameter names to values for</span>
+<span class="sd">            this particular evaluation.  Defaults to ``None``.</span>
+<span class="sd">        model_random_seed (int): Base random seed.  Defaults to ``42``.</span>
+<span class="sd">        run_n_times (int): Number of independent repetitions (each with seed</span>
+<span class="sd">            ``model_random_seed + i``).  Defaults to ``1``.</span>
+<span class="sd">        n_days (int): Override for the simulation duration.  If ``None``,</span>
+<span class="sd">            the value from config (or ``60``) is used.</span>
+<span class="sd">        return_func (str): Key into ``return_func_zoo`` selecting the metric</span>
+<span class="sd">            to compute.  ``None`` returns the model object itself.</span>
+<span class="sd">        return_func_kwargs (Dict): Extra keyword arguments forwarded to the</span>
+<span class="sd">            selected return function.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: A dictionary with the following keys:</span>
+
+<span class="sd">            * ``&quot;result&quot;`` – scalar metric (or list of metrics when</span>
+<span class="sd">              ``run_n_times &gt; 1``), or the model object when</span>
+<span class="sd">              ``return_func`` is ``None``.</span>
+<span class="sd">            * ``&quot;hyperparams&quot;`` – the (potentially transformed) hyperparameter</span>
+<span class="sd">              dictionary used for this run.</span>
+<span class="sd">            * ``&quot;seed&quot;`` – the base random seed that was used.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># copy model</span>
+    <span class="n">ndays</span> <span class="o">=</span> <span class="n">n_days</span> <span class="k">if</span> <span class="n">n_days</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span> <span class="mi">60</span><span class="p">)</span>
+    <span class="n">print_interval</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;print_interval&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">verbose</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;TASK&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;verbose&quot;</span><span class="p">,</span> <span class="s2">&quot;Yes&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span>
+
+    <span class="c1"># these are some special hacks related to infection model</span>
+    <span class="k">if</span> <span class="s2">&quot;theta&quot;</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="p">:</span>
+        <span class="n">hyperparams</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;theta_E&quot;</span><span class="p">:</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;theta&quot;</span><span class="p">],</span>
+                            <span class="s2">&quot;theta_Ia&quot;</span><span class="p">:</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;theta&quot;</span><span class="p">],</span>
+                            <span class="s2">&quot;theta_In&quot;</span><span class="p">:</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;theta&quot;</span><span class="p">]</span>
+                            <span class="p">})</span>
+        <span class="k">del</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;theta&quot;</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="s2">&quot;a_reduction&quot;</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="p">:</span>
+        <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta_A&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;a_reduction&quot;</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;a_reduction&quot;</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="s2">&quot;beta&quot;</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="p">:</span>
+        <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta_in_family&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;beta_A&quot;</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="p">:</span>
+        <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta_A_in_family&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">hyperparams</span><span class="p">[</span><span class="s2">&quot;beta_A&quot;</span><span class="p">]</span>
+
+    <span class="n">policy_hyperparams</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;policy_&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">):</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;policy_&#39;</span><span class="p">)}</span>
+    <span class="n">hyperparams</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">hyperparams</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">k</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;policy_&#39;</span><span class="p">)}</span>
+
+    <span class="k">if</span> <span class="n">preloaded_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">load_model_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="p">,</span> <span class="n">preloaded_graph</span><span class="o">=</span><span class="n">preloaded_graph</span><span class="p">,</span>
+                                       <span class="n">hyperparams</span><span class="o">=</span><span class="n">hyperparams</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="n">policy_hyperparams</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">preloaded_model</span><span class="o">.</span><span class="n">duplicate</span><span class="p">(</span><span class="n">model_random_seed</span><span class="p">,</span> <span class="n">hyperparams</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="n">policy_hyperparams</span><span class="p">)</span>
+
+    <span class="c1"># for different seeds</span>
+    <span class="k">def</span> <span class="nf">_run_one_model</span><span class="p">(</span><span class="n">seed</span><span class="p">):</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">reset</span><span class="p">(</span><span class="n">random_seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">run_single_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">T</span><span class="o">=</span><span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ret</span>
+
+    <span class="c1"># specific return function or identity</span>
+    <span class="n">func</span> <span class="o">=</span> <span class="n">return_func_zoo</span><span class="p">[</span><span class="n">return_func</span><span class="p">]</span> <span class="k">if</span> <span class="n">return_func</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="k">lambda</span> <span class="n">m</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">m</span>
+
+    <span class="k">if</span> <span class="n">run_n_times</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="c1"># add 1 to seed each run</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">[</span><span class="n">func</span><span class="p">(</span><span class="n">_run_one_model</span><span class="p">(</span><span class="n">seed</span><span class="p">),</span> <span class="o">**</span><span class="n">return_func_kwargs</span><span class="p">)</span>
+               <span class="k">for</span> <span class="n">seed</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">model_random_seed</span><span class="p">,</span> <span class="n">model_random_seed</span> <span class="o">+</span> <span class="n">run_n_times</span><span class="p">)]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">func</span><span class="p">(</span><span class="n">_run_one_model</span><span class="p">(</span><span class="n">model_random_seed</span><span class="p">),</span> <span class="o">**</span><span class="n">return_func_kwargs</span><span class="p">)</span>
+
+    <span class="c1"># optionally return additional run info</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">res</span><span class="p">,</span>
+        <span class="s2">&quot;hyperparams&quot;</span><span class="p">:</span> <span class="n">hyperparams</span><span class="p">,</span>
+        <span class="s2">&quot;seed&quot;</span><span class="p">:</span> <span class="n">model_random_seed</span>
+    <span class="p">}</span>
+
+
+<span class="k">def</span> <span class="nf">_init_hyperparam_search</span><span class="p">(</span><span class="n">hyperparam_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a hyperparameter search configuration and return the search callable.</span>
+
+<span class="sd">    Reads a JSON file whose ``&quot;method&quot;`` key selects the search strategy from</span>
+<span class="sd">    ``hyperparam_search_zoo``.  The full config dict is partially applied as</span>
+<span class="sd">    the ``hyperparam_config`` argument of the chosen strategy function.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        hyperparam_file (str): Path to the JSON configuration file describing</span>
+<span class="sd">            the hyperparameter search (method, parameter ranges, CMA settings,</span>
+<span class="sd">            etc.).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        functools.partial: A callable ``(model_func, **kwargs) -&gt; result`` that</span>
+<span class="sd">        executes the selected search strategy with the loaded configuration</span>
+<span class="sd">        already bound.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">hyperparam_file</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">json_file</span><span class="p">:</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">json_file</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">partial</span><span class="p">(</span><span class="n">hyperparam_search_zoo</span><span class="p">[</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;method&quot;</span><span class="p">]],</span> <span class="n">hyperparam_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

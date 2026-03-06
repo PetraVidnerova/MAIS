@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>eva_policy &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>eva_policy</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for eva_policy</h1><div class="highlight"><pre>
+<span></span><span class="c1"># NOTE: this is an older version of contact tracing policy for TGMNetworkModel,</span>
+<span class="c1"># not maintained now!</span>
+
+<span class="sd">&quot;&quot;&quot;Legacy contact-tracing policy for TGMNetworkModel (unmaintained).</span>
+
+<span class="sd">This module provides older-style quarantine and contact-tracing policy</span>
+<span class="sd">classes originally written for the TGMNetworkModel.  They are **not</span>
+<span class="sd">maintained** and should not be used for new simulations.  Prefer</span>
+<span class="sd">:mod:`policies.contact_tracing` for current work.</span>
+
+<span class="sd">Classes:</span>
+<span class="sd">    QuarantinePolicy: Base quarantine policy with contact tracing.</span>
+<span class="sd">    EvaQuarantinePolicy: Full quarantine + enter test policy.</span>
+<span class="sd">    CRLikeQuarantinePolicy: Czech-Republic-like variant.</span>
+<span class="sd">    StrongEvaQuarantinePolicy: Maximum-riskiness variant.</span>
+<span class="sd">    NoEvaQuarantinePolicy: Zero-riskiness variant.</span>
+<span class="sd">    MiniEvaQuarantinePolicy: Minimal-riskiness variant.</span>
+<span class="sd">    Exp2A/B/CQuarantinePolicy: Experimental riskiness variants.</span>
+<span class="sd">    W10/20/30/40/60/80QuarantinePolicy: Uniform riskiness variants.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">from</span> <span class="nn">extended_network_model</span> <span class="kn">import</span> <span class="n">STATES</span> <span class="k">as</span> <span class="n">states</span>
+<span class="kn">from</span> <span class="nn">policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">depo</span> <span class="kn">import</span> <span class="n">Depo</span>
+<span class="kn">from</span> <span class="nn">history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">from</span> <span class="nn">quarantine_coefs</span> <span class="kn">import</span> <span class="n">QUARANTINE_COEFS</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_MAX</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_MINI</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_60</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_10</span><span class="p">,</span> <span class="n">RISK_FOR_LAYERS_30</span>
+<span class="kn">from</span> <span class="nn">quarantine_coefs</span> <span class="kn">import</span> <span class="n">get_riskiness</span>
+
+<span class="c1">#GIRL = 29691</span>
+<span class="n">GIRL</span> <span class="o">=</span> <span class="mi">10</span>
+
+<span class="n">DETECTED_STATES</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span>
+    <span class="n">states</span><span class="o">.</span><span class="n">J_dn</span>
+<span class="p">)</span>
+
+
+<div class="viewcode-block" id="QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">QuarantinePolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base quarantine policy with optional contact tracing (legacy TGMNetworkModel).</span>
+
+<span class="sd">    Provides the core deposit/release mechanism and contact-history</span>
+<span class="sd">    filtering.  Intended as a base class; subclasses set ``coefs``,</span>
+<span class="sd">    ``riskiness``, and ``duration`` before use.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance (TGMNetworkModel).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="QuarantinePolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the quarantine policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="c1"># depo of quarantined nodes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span> <span class="o">=</span> <span class="mi">7</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quarantine</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">301</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_detected</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">301</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">301</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_released</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">301</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+        <span class="c1"># self.stat_in_quarantine[0] = 0</span>
+        <span class="c1"># self.stat_detected[0] = 0</span>
+        <span class="c1"># self.stat_contacts_collected[0] = 0</span>
+        <span class="c1"># self.stat_released[0] = 0</span>
+
+<div class="viewcode-block" id="QuarantinePolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame with quarantine and tracing statistics.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: DataFrame indexed by time ``T`` with</span>
+<span class="sd">            columns for nodes in quarantine, detected nodes, contacts</span>
+<span class="sd">            collected, and released nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">eva_name</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">eva_name</span><span class="si">}</span><span class="s2">_nodes_in_quarantine&quot;</span><span class="p">:</span>  <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quarantine</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">eva_name</span><span class="si">}</span><span class="s2">_detected_nodes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_detected</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">eva_name</span><span class="si">}</span><span class="s2">_contacts_collected&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">eva_name</span><span class="si">}</span><span class="s2">_released_nodes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_released</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+        <span class="p">}</span>
+        <span class="n">columns</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.stop">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.stop">[docs]</a>
+    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop quarantining new nodes.</span>
+
+<span class="sd">        After calling ``stop``, existing quarantines are still managed</span>
+<span class="sd">        but no new nodes are placed into quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.get_last_day">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.get_last_day">[docs]</a>
+    <span class="k">def</span> <span class="nf">get_last_day</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the slice of model history corresponding to the current day.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list: Entries from ``model.history`` that fall within the</span>
+<span class="sd">            time interval ``[current_day, current_day + 1)``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">current_day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">)</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">tseries</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">tidx</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span> <span class="n">current_day</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">start</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">start</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">end</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">tseries</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">tidx</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span> <span class="n">current_day</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">history</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.quarantine_nodes">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.quarantine_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">quarantine_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Place detected nodes into quarantine and suppress their graph layers.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (list): Node indices to quarantine.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">detected_nodes</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">modify_layers_for_nodes</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.tick">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.tick">[docs]</a>
+    <span class="k">def</span> <span class="nf">tick</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the deposit by one day and return released nodes.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Indices of nodes released from quarantine today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">released</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.release_nodes">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.release_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">release_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">released</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore graph edges for nodes leaving quarantine.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            released (numpy.ndarray): Indices of nodes to release.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> Released nodes: </span><span class="si">{</span><span class="n">released</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">recover_edges_for_nodes</span><span class="p">(</span><span class="n">released</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.do_testing">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.do_testing">[docs]</a>
+    <span class="k">def</span> <span class="nf">do_testing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">released</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Test the given nodes and classify them as healthy or ill.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            released (numpy.ndarray): Indices of nodes to test.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple[numpy.ndarray, numpy.ndarray]: A pair</span>
+<span class="sd">            ``(healthy, still_ill)`` of node-index arrays based on</span>
+<span class="sd">            whether each node is in a recovered/susceptible state.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;DBG Leaving tests&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([]),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span>
+
+        <span class="c1"># add number of tests to model statistics</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_qtests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+
+        <span class="c1"># chose those that are not ill</span>
+        <span class="n">node_is_R</span> <span class="o">=</span> <span class="n">_is_R</span><span class="p">(</span><span class="n">released</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span>
+        <span class="n">healthy</span> <span class="o">=</span> <span class="n">released</span><span class="p">[</span><span class="n">node_is_R</span><span class="p">]</span>
+        <span class="n">still_ill</span> <span class="o">=</span> <span class="n">released</span><span class="p">[</span><span class="n">node_is_R</span> <span class="o">==</span> <span class="kc">False</span><span class="p">]</span>
+
+        <span class="c1"># if GIRL in list(still_ill):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}: node {29691} tested positivily.&quot;)</span>
+
+        <span class="k">return</span> <span class="n">healthy</span><span class="p">,</span>  <span class="n">still_ill</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.filter_contact_history">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.filter_contact_history">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter_contact_history</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">,</span> <span class="n">days_back</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Filter contact history for detected nodes and apply riskiness weighting.</span>
+
+<span class="sd">        Looks back ``days_back`` days in ``model.contact_history`` for</span>
+<span class="sd">        edges where the source node is in ``detected_nodes``, then</span>
+<span class="sd">        stochastically retains each contact with probability equal to</span>
+<span class="sd">        the riskiness of its contact layer.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (list): Node indices whose contacts should be</span>
+<span class="sd">                traced.</span>
+<span class="sd">            days_back (int, optional): Number of days to look back.</span>
+<span class="sd">                Defaults to ``self.days_back``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            list: Contact node indices that passed the riskiness filter.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">days_back</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">days_back</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span>
+
+        <span class="c1"># if self.riskiness is None:</span>
+        <span class="c1">#     return [</span>
+        <span class="c1">#         contact[1]</span>
+        <span class="c1">#         for contact_list in self.model.contact_history</span>
+        <span class="c1">#         for contact in contact_list</span>
+        <span class="c1">#         if contact[0] in detected_nodes</span>
+        <span class="c1">#     ]</span>
+        <span class="c1"># else:</span>
+
+        <span class="n">relevant_contacts</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="p">(</span><span class="n">contact</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">_riskiness</span><span class="p">(</span><span class="n">contact</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span><span class="p">))</span>
+            <span class="c1"># five day back</span>
+            <span class="k">for</span> <span class="n">contact_list</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">contact_history</span><span class="p">[</span><span class="o">-</span><span class="n">days_back</span><span class="p">:]</span>
+
+            <span class="k">for</span> <span class="n">contact</span> <span class="ow">in</span> <span class="n">contact_list</span>
+            <span class="k">if</span> <span class="n">contact</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">detected_nodes</span>
+        <span class="p">]</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG QE </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: all contacts </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">relevant_contacts</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">relevant_contacts</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">relevant_contacts</span>
+
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">relevant_contacts</span><span class="p">))</span>
+        <span class="n">selected_contacts</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">contact</span>
+            <span class="k">for</span> <span class="p">(</span><span class="n">contact</span><span class="p">,</span> <span class="n">threashold</span><span class="p">),</span> <span class="n">r_number</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">relevant_contacts</span><span class="p">,</span> <span class="n">r</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">r_number</span> <span class="o">&lt;</span> <span class="n">threashold</span>
+        <span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG QE </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: selected contacts </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">selected_contacts</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">selected_contacts</span></div>
+
+
+<div class="viewcode-block" id="QuarantinePolicy.select_contacts">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.QuarantinePolicy.select_contacts">[docs]</a>
+    <span class="k">def</span> <span class="nf">select_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">,</span> <span class="n">days_back</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the set of contacts for the given detected nodes.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (list): Node indices whose contacts should be</span>
+<span class="sd">                traced.</span>
+<span class="sd">            days_back (int, optional): Number of days to look back.</span>
+<span class="sd">                Defaults to ``self.days_back``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            set: Set of contact node indices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">filter_contact_history</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span> <span class="n">days_back</span><span class="p">))</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="EvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.EvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">EvaQuarantinePolicy</span><span class="p">(</span><span class="n">QuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Full quarantine policy with enter testing (legacy TGMNetworkModel).</span>
+
+<span class="sd">    Detected nodes (those entering a detected state during the last</span>
+<span class="sd">    day) are quarantined for ``duration`` days.  Their contacts are</span>
+<span class="sd">    traced, placed in a phone-call waiting queue, then quarantined and</span>
+<span class="sd">    given an enter test.  Contacts that test positive are moved to a</span>
+<span class="sd">    detected state and trigger further contact tracing.  Leaving nodes</span>
+<span class="sd">    are tested twice before release.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance (TGMNetworkModel).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="EvaQuarantinePolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.EvaQuarantinePolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the Eva quarantine policy with default parameters.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">QUARANTINE_COEFS</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="mi">14</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span> <span class="o">=</span> <span class="mi">7</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span> <span class="o">=</span> <span class="mi">2</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test_range</span> <span class="o">=</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: Here we are.&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: My riskiness: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># nodes marked as contacts and waiting for being informed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for enter-test</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for enter-test result</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_result_enter_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+
+        <span class="c1"># nodes waiting for second test</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="EvaQuarantinePolicy.run">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.EvaQuarantinePolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the Eva quarantine policy.</span>
+
+<span class="sd">        On the first call, statistics arrays are back-filled with zeros.</span>
+<span class="sd">        Each step: identifies newly detected nodes, traces their</span>
+<span class="sd">        contacts, advances all waiting rooms, performs enter tests,</span>
+<span class="sd">        quarantines all eligible nodes, runs exit tests, and releases</span>
+<span class="sd">        passing nodes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quarantine</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_detected</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_released</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Hello world! This is the eva policy function speaking.  </span><span class="si">{</span><span class="s1">&#39;(STOPPED)&#39;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="o">.</span><span class="n">stopped</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;QE </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: Nodes in isolation/quarantine </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">num_of_prisoners</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span><span class="p">:</span>
+            <span class="n">last_day</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_last_day</span><span class="p">()</span>
+
+            <span class="c1"># those who became infected today</span>
+            <span class="n">detected_nodes</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">node</span>
+                <span class="k">for</span> <span class="n">node</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">last_day</span>
+                <span class="k">if</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">DETECTED_STATES</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">is_locked</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+            <span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_detected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">detected_nodes</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># if GIRL in detected_nodes:</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} was detected and is quarantined by eva and asked for contacts.&quot;)</span>
+
+        <span class="n">new_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">select_contacts</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">new_contacts</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2"> DBG QE: Qurantined nodes: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2"> DBG QE: Found contacts: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">new_contacts</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># if GIRL in list(contacts):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} was marked as contact.&quot;)</span>
+
+        <span class="c1"># get contats to be quarantined (except those who are already in quarantine)</span>
+        <span class="n">contacts_ready_for_quarantine</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">x</span>
+            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">is_locked</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span>
+            <span class="nb">list</span><span class="p">(</span><span class="n">new_contacts</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2"> DBG QE: Quaratinted contacts: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">contacts_ready_for_quarantine</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># if GIRL in list(released_waiting_nodes):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} was quarantined by Eva (because beeing contact).&quot;)</span>
+
+        <span class="c1"># contacts wait for 5th day test and collect those who should be tested today</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span><span class="p">:</span>
+            <span class="n">nodes_to_be_tested</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_enter_test</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">contacts_ready_for_quarantine</span><span class="p">,</span>
+                                                 <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">enter_test_range</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span>
+                                                     <span class="n">contacts_ready_for_quarantine</span><span class="p">))</span>
+                                                 <span class="p">)</span>
+
+            <span class="c1"># do testing</span>
+            <span class="n">healthy</span><span class="p">,</span> <span class="n">ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">do_testing</span><span class="p">(</span><span class="n">nodes_to_be_tested</span><span class="p">)</span>
+            <span class="c1"># we do not care about healthy, ill waits for test results</span>
+            <span class="n">contacts_positively_tested</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_result_enter_test</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_result_enter_test</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">ill</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="c1"># move positivily tested to I/J_d* states</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">contacts_positively_tested</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">detected_node</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+            <span class="c1"># select contacts of positively tested</span>
+            <span class="n">other_contacts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">select_contacts</span><span class="p">(</span>
+                <span class="n">contacts_positively_tested</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">days_back</span><span class="o">+</span><span class="mi">2</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stat_contacts_collected</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">other_contacts</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_phone_call</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span>
+                <span class="nb">list</span><span class="p">(</span><span class="n">other_contacts</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">phone_call_delay</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># quarantine opens doors - those who spent the 14 days are released,</span>
+        <span class="c1"># newly detected + contacted contacts are locked up</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tick</span><span class="p">()</span>
+        <span class="nb">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">),</span> <span class="n">detected_nodes</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">contacts_ready_for_quarantine</span><span class="p">),</span>
+              <span class="n">contacts_ready_for_quarantine</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantine_nodes</span><span class="p">(</span>
+            <span class="n">detected_nodes</span><span class="o">+</span><span class="nb">list</span><span class="p">(</span><span class="n">contacts_ready_for_quarantine</span><span class="p">))</span>
+
+        <span class="c1"># do final testing</span>
+        <span class="c1"># two positive tests are needed for leaving (tests are always correct!)</span>
+        <span class="n">second_test_candidates</span><span class="p">,</span> <span class="n">still_ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">do_testing</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+
+        <span class="c1"># still ill nodes go back to quarantine</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">still_ill</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">still_ill</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">detected_node</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">still_ill</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+        <span class="c1"># if GIRL in list(prisoners):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} waits for negative test in eva quarantine.&quot;)</span>
+
+        <span class="c1"># healthy wait for the second test, those tested second time released</span>
+        <span class="n">ready_to_leave</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">second_test_candidates</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">waiting_room_second_test</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">second_test_candidates</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">num_qtests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ready_to_leave</span><span class="p">)</span>
+
+        <span class="c1"># if GIRL in list(release_candidates):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} has negative test and waits for second one  in eva quarantine.&quot;)</span>
+
+        <span class="c1"># if GIRL in list(really_released):</span>
+        <span class="c1">#     print(</span>
+        <span class="c1">#         f&quot;ACTION LOG({int(self.model.t)}): node {GIRL} was released from quarantine by eva.&quot;)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_released</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ready_to_leave</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">ready_to_leave</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_in_quarantine</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">num_of_prisoners</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="CRLikeQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.CRLikeQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">CRLikeQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Czech-Republic-like quarantine policy with time-varying riskiness.</span>
+
+<span class="sd">    Applies harder riskiness early in the simulation and relaxes it at</span>
+<span class="sd">    days 10 and 66.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="CRLikeQuarantinePolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.CRLikeQuarantinePolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise with CR-like default riskiness.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.01</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="CRLikeQuarantinePolicy.run">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.CRLikeQuarantinePolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step, adjusting riskiness on key days.</span>
+
+<span class="sd">        Reconfigures riskiness at simulation days 10 and 66 before</span>
+<span class="sd">        delegating to :meth:`EvaQuarantinePolicy.run`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">==</span> <span class="mi">66</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_test</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">==</span> <span class="mi">10</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="StrongEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.StrongEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">StrongEvaQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with maximum riskiness for all layers.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">RISK_FOR_LAYERS_MAX</span></div>
+
+
+
+<div class="viewcode-block" id="NoEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.NoEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">NoEvaQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with zero riskiness (no contacts traced).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="MiniEvaQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.MiniEvaQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">MiniEvaQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with minimal riskiness (family only).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">RISK_FOR_LAYERS_MINI</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2AQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.Exp2AQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2AQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant A: full riskiness for family, school/work, and leisure.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2BQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.Exp2BQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2BQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant B: full riskiness for family and school/work only.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="Exp2CQuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.Exp2CQuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">Exp2CQuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Experimental variant C: full riskiness for family contacts only.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W10QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W10QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W10QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 10 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W20QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W20QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W20QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 20 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W30QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W30QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W30QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 30 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W40QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W40QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W40QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 40 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.4</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W60QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W60QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W60QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 60 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="W80QuarantinePolicy">
+<a class="viewcode-back" href="../src_modules.html#eva_policy.W80QuarantinePolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">W80QuarantinePolicy</span><span class="p">(</span><span class="n">EvaQuarantinePolicy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eva quarantine policy with uniform 80 % riskiness.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">riskiness</span> <span class="o">=</span> <span class="n">get_riskiness</span><span class="p">(</span><span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_is_R</span><span class="p">(</span><span class="n">node_ids</span><span class="p">,</span> <span class="n">memberships</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Check whether nodes are in a recovered or susceptible state.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        node_ids (numpy.ndarray): Indices of nodes to check.</span>
+<span class="sd">        memberships: Model membership array (state × nodes × 1).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        numpy.ndarray: Array of 0/1 values; 1 if the node is in a</span>
+<span class="sd">        recovered/susceptible state (R_u, R_d, S, S_s, D_u, or D_d).</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        AssertionError: If ``memberships`` is ``None``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">memberships</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+
+    <span class="n">recovered_states_flags</span> <span class="o">=</span> <span class="p">(</span><span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">R_u</span><span class="p">]</span> <span class="o">+</span>
+                              <span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">R_d</span><span class="p">]</span> <span class="o">+</span>
+                              <span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">S</span><span class="p">]</span> <span class="o">+</span>
+                              <span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">S_s</span><span class="p">]</span>
+                              <span class="o">+</span> <span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">D_u</span><span class="p">]</span> <span class="o">+</span>
+                              <span class="n">memberships</span><span class="p">[</span><span class="n">states</span><span class="o">.</span><span class="n">D_d</span><span class="p">])</span>
+    <span class="n">release_recovered</span> <span class="o">=</span> <span class="n">recovered_states_flags</span><span class="o">.</span><span class="n">ravel</span><span class="p">()[</span><span class="n">node_ids</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">release_recovered</span>
+
+
+<span class="k">def</span> <span class="nf">_riskiness</span><span class="p">(</span><span class="n">contact</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">riskiness</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the riskiness value for a given contact edge.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        contact: Edge identifier used to look up the layer.</span>
+<span class="sd">        graph: The contact network graph with a ``get_layer_for_edge``</span>
+<span class="sd">            method.</span>
+<span class="sd">        riskiness (numpy.ndarray): Per-layer riskiness array.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Riskiness of the layer for the given contact edge.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#    print(f&quot;DBG riskiness {graph.e_types[contact]}:{riskiness[graph.get_layer_for_edge(contact)]}&quot;)</span>
+    <span class="k">return</span> <span class="n">riskiness</span><span class="p">[</span><span class="n">graph</span><span class="o">.</span><span class="n">get_layer_for_edge</span><span class="p">(</span><span class="n">contact</span><span class="p">)]</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

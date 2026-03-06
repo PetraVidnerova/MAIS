@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>depo &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>depo</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for depo</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Deposit (Depo) utility for tracking nodes held for a fixed duration.</span>
+
+<span class="sd">This module provides the :class:`Depo` class used by policy objects to</span>
+<span class="sd">place nodes into quarantine or isolation for a configurable number of</span>
+<span class="sd">time-steps and to release them automatically when their sentence</span>
+<span class="sd">expires.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<div class="viewcode-block" id="Depo">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo">[docs]</a>
+<span class="k">class</span> <span class="nc">Depo</span><span class="p">:</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Deposit object for holding nodes for a fixed number of time-steps.</span>
+
+<span class="sd">    Used in policies to store nodes (e.g. quarantined individuals) for a</span>
+<span class="sd">    given period of time.  Internally maintains a counter array; each</span>
+<span class="sd">    entry holds the remaining number of time-steps before that node is</span>
+<span class="sd">    released.  A value of zero means the node is not currently held.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        size (int): Total number of nodes in the simulation (length of</span>
+<span class="sd">            the internal counter array).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="Depo.__init__">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the deposit with a counter array of zeros.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            size (int): Number of nodes (length of the counter array).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint8&quot;</span><span class="p">)</span></div>
+
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">num_of_prisoners</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the number of nodes currently held in the deposit.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            int: Count of nodes whose remaining time is greater than zero.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+<div class="viewcode-block" id="Depo.lock_up">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.lock_up">[docs]</a>
+    <span class="k">def</span> <span class="nf">lock_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Place nodes into the deposit for a given duration.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (list or numpy.ndarray): Node indices to lock up.</span>
+<span class="sd">            duration (int or numpy.ndarray): Number of time-steps each</span>
+<span class="sd">                node should remain in the deposit.  May be a scalar</span>
+<span class="sd">                applied to all nodes or an array of per-node values.</span>
+<span class="sd">                Defaults to 14.</span>
+<span class="sd">            check_duplicate (bool): If ``True``, nodes that are already</span>
+<span class="sd">                in the deposit are silently ignored (their remaining</span>
+<span class="sd">                time is not updated).  If ``False`` (default), an</span>
+<span class="sd">                assertion error is raised if any node is already held.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            AssertionError: If ``nodes`` is not a list or</span>
+<span class="sd">                ``numpy.ndarray``, or if ``check_duplicate`` is</span>
+<span class="sd">                ``False`` and any node is already in the deposit.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">nodes</span><span class="p">,</span> <span class="nb">list</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;real type </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">check_duplicate</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">check_duplicate</span><span class="p">:</span>
+                <span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+                <span class="n">zero_nodes</span> <span class="o">=</span> <span class="n">nodes</span><span class="p">[(</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">zero_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">duration</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">duration</span></div>
+
+
+<div class="viewcode-block" id="Depo.filter_locked">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.filter_locked">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the subset of candidates that are not yet in the deposit.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            candidates (numpy.ndarray): Array of node indices to filter.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Subset of ``candidates`` whose deposit</span>
+<span class="sd">            counter is currently zero (i.e. not locked up).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">candidates</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">candidates</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">candidates</span><span class="p">]</span><span class="o">==</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">candidates</span></div>
+
+    
+
+<div class="viewcode-block" id="Depo.filter_locked_bitmap">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.filter_locked_bitmap">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter_locked_bitmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a boolean mask indicating which candidates are not in the deposit.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            candidates (numpy.ndarray): Array of node indices to check.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean array of the same length as</span>
+<span class="sd">            ``candidates``.  Entry is ``True`` if the corresponding</span>
+<span class="sd">            candidate is **not** currently in the deposit, ``False``</span>
+<span class="sd">            if it is already locked up.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">candidates</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="Depo.tick_and_get_released">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.tick_and_get_released">[docs]</a>
+    <span class="k">def</span> <span class="nf">tick_and_get_released</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the deposit by one time-step and return newly released nodes.</span>
+
+<span class="sd">        Decrements all non-zero counters by one.  Nodes whose counter</span>
+<span class="sd">        reaches zero are considered released.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of node indices that were released</span>
+<span class="sd">            (i.e. had a counter of exactly 1 before the decrement).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nonzero</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">released</span></div>
+
+
+<div class="viewcode-block" id="Depo.is_locked">
+<a class="viewcode-back" href="../src_modules.html#depo.Depo.is_locked">[docs]</a>
+    <span class="k">def</span> <span class="nf">is_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Check whether a single node is currently held in the deposit.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            node_id (int): Index of the node to check.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: ``True`` if the node&#39;s remaining time is greater than</span>
+<span class="sd">            zero, ``False`` otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="p">[</span><span class="n">node_id</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>extended_network_model &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>extended_network_model</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for extended_network_model</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Extended SEIRS network model definition.</span>
+
+<span class="sd">This module defines the full epidemiological compartment model used in the</span>
+<span class="sd">MAIS project (``ExtendedNetworkModel`` and its variants).  It contains:</span>
+
+<span class="sd">* :class:`STATES` – integer compartment codes and the ``detected`` subset.</span>
+<span class="sd">* ``state_codes`` – human-readable label mapping.</span>
+<span class="sd">* ``model_definition`` – the complete model specification dict (states,</span>
+<span class="sd">  transitions, parameters).</span>
+<span class="sd">* :func:`calc_propensities` – per-node daily transition-probability function.</span>
+<span class="sd">* Four model classes created via :func:`~models.model.create_custom_model`:</span>
+
+<span class="sd">  * ``ExtendedNetworkModel`` – Gillespie (continuous-time) engine.</span>
+<span class="sd">  * ``ExtendedDailyNetworkModel`` – daily-batched Gillespie engine.</span>
+<span class="sd">  * ``ExtendedSequentialNetworkModel`` – discrete-step sequential engine.</span>
+<span class="sd">  * ``TGMNetworkModel`` – multi-layer-graph engine (EngineM).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">models.model</span> <span class="kn">import</span> <span class="n">create_custom_model</span>
+<span class="kn">from</span> <span class="nn">models.engine_daily</span> <span class="kn">import</span> <span class="n">DailyEngine</span>
+<span class="kn">from</span> <span class="nn">models.engine_sequential</span> <span class="kn">import</span> <span class="n">SequentialEngine</span>
+<span class="kn">from</span> <span class="nn">models.engine_m</span> <span class="kn">import</span> <span class="n">EngineM</span>
+<span class="c1"># models</span>
+
+<span class="c1"># model = ENGINE + MODEL DEFINITION</span>
+
+<span class="c1"># engine is not cofigurable yet</span>
+<span class="c1"># you can specify your model definition</span>
+
+
+<div class="viewcode-block" id="STATES">
+<a class="viewcode-back" href="../src_modules.html#extended_network_model.STATES">[docs]</a>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended state codes including detected variants of every compartment.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        S (int): Susceptible.</span>
+<span class="sd">        S_s (int): Susceptible with false symptoms.</span>
+<span class="sd">        E (int): Exposed.</span>
+<span class="sd">        I_n (int): Infectious, asymptomatic non-symptomatic track.</span>
+<span class="sd">        I_a (int): Infectious, pre-symptomatic.</span>
+<span class="sd">        I_s (int): Infectious, symptomatic.</span>
+<span class="sd">        I_ds (int): Infectious, symptomatic, detected.</span>
+<span class="sd">        J_s (int): Post-infectious, symptomatic.</span>
+<span class="sd">        J_n (int): Post-infectious, asymptomatic.</span>
+<span class="sd">        E_d (int): Exposed, detected.</span>
+<span class="sd">        I_da (int): Infectious, pre-symptomatic, detected.</span>
+<span class="sd">        I_dn (int): Infectious, asymptomatic, detected.</span>
+<span class="sd">        J_ds (int): Post-infectious, symptomatic, detected.</span>
+<span class="sd">        J_dn (int): Post-infectious, asymptomatic, detected.</span>
+<span class="sd">        R_d (int): Recovered, detected.</span>
+<span class="sd">        R_u (int): Recovered, undetected.</span>
+<span class="sd">        D_d (int): Dead, detected.</span>
+<span class="sd">        D_u (int): Dead, undetected.</span>
+<span class="sd">        detected (set): Subset of state codes that are in a detected state.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">S</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">S_s</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">E</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">I_n</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">I_a</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">I_s</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">I_ds</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="n">J_s</span> <span class="o">=</span> <span class="mi">11</span>
+    <span class="n">J_n</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">E_d</span> <span class="o">=</span> <span class="mi">13</span>
+    <span class="n">I_da</span> <span class="o">=</span> <span class="mi">14</span>
+    <span class="n">I_dn</span> <span class="o">=</span> <span class="mi">15</span>
+    <span class="n">J_ds</span> <span class="o">=</span> <span class="mi">16</span>
+    <span class="n">J_dn</span> <span class="o">=</span> <span class="mi">17</span>
+    <span class="n">R_d</span> <span class="o">=</span> <span class="mi">7</span>
+    <span class="n">R_u</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">D_d</span> <span class="o">=</span> <span class="mi">9</span>
+    <span class="n">D_u</span> <span class="o">=</span> <span class="mi">10</span>
+
+    <span class="n">detected</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">I_ds</span><span class="p">,</span>
+        <span class="n">E_d</span><span class="p">,</span>
+        <span class="n">I_da</span><span class="p">,</span>
+        <span class="n">I_dn</span><span class="p">,</span>
+        <span class="n">J_ds</span><span class="p">,</span>
+        <span class="n">J_dn</span>
+    <span class="p">}</span>
+
+    <span class="k">pass</span></div>
+
+
+
+<span class="n">state_codes</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">:</span>     <span class="s2">&quot;S&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">:</span>   <span class="s2">&quot;S_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">:</span>     <span class="s2">&quot;E&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">:</span>   <span class="s2">&quot;I_n&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">:</span>   <span class="s2">&quot;I_a&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">:</span>   <span class="s2">&quot;I_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">:</span>  <span class="s2">&quot;I_ds&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">:</span>   <span class="s2">&quot;J_s&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">:</span>   <span class="s2">&quot;J_n&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">:</span>   <span class="s2">&quot;E_d&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">:</span>  <span class="s2">&quot;I_da&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">:</span>  <span class="s2">&quot;I_dn&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">:</span>  <span class="s2">&quot;J_ds&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">:</span>  <span class="s2">&quot;J_dn&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">:</span>   <span class="s2">&quot;R_d&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">:</span>   <span class="s2">&quot;R_u&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">:</span>   <span class="s2">&quot;D_d&quot;</span><span class="p">,</span>
+    <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">:</span>   <span class="s2">&quot;D_u&quot;</span>
+<span class="p">}</span>
+
+
+<span class="c1"># MODEL DEFINITION</span>
+
+<span class="c1"># 1. states, transtion types, parameters</span>
+<span class="n">model_definition</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="c1"># define your model states and transition types</span>
+    <span class="c1">#</span>
+    <span class="c1"># define model arguments (arguments of constructor) and parameters (arguments of</span>
+    <span class="c1"># constuctor)</span>
+    <span class="c1"># arguments are dictionaries: { arg_name : (default value, description) }</span>
+    <span class="c1">#  init_arguments   .... model parameters single value</span>
+    <span class="c1">#                        e.g. &quot;p&quot;: (0.2, &quot;probability of external constact&quot;)</span>
+    <span class="c1">#</span>
+    <span class="c1">#  model_parameters .... model parameters: single value or np.array</span>
+    <span class="c1">#                        those that can differ for each node</span>
+    <span class="c1">#                        i.e. &quot;beta&quot;: (0.2, &quot;transmission rate&quot;)</span>
+    <span class="c1">#</span>
+    <span class="c1"># you do note have to define init_{STATE_NAME} arguments, you can use them</span>
+    <span class="c1"># by default (they define numbers of individuals in individual stats,</span>
+    <span class="c1"># the rest of population is assing the the first state)</span>
+
+    <span class="s2">&quot;states&quot;</span><span class="p">:</span>  <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span>
+    <span class="p">],</span>
+
+    <span class="s2">&quot;state_str_dict&quot;</span><span class="p">:</span> <span class="n">state_codes</span><span class="p">,</span>
+
+    <span class="s2">&quot;transitions&quot;</span><span class="p">:</span>  <span class="p">[</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span>  <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">),</span>  <span class="c1"># 0</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span>  <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">),</span>  <span class="c1"># 1</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span>  <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">),</span>  <span class="c1"># 2</span>
+
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">),</span>  <span class="c1"># 3</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">),</span>  <span class="c1"># 4</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">),</span>  <span class="c1"># 5</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">),</span>  <span class="c1"># 6</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">),</span>  <span class="c1"># 7</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">),</span>  <span class="c1"># 8</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">),</span>  <span class="c1"># 9</span>
+
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">),</span>
+
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">),</span>
+
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">)</span>
+
+    <span class="p">],</span>
+
+    <span class="s2">&quot;final_states&quot;</span><span class="p">:</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span>
+    <span class="p">],</span>
+
+    <span class="s2">&quot;invisible_states&quot;</span><span class="p">:</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span>
+    <span class="p">],</span>
+
+    <span class="s2">&quot;unstable_states&quot;</span><span class="p">:</span> <span class="p">[</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span>
+    <span class="p">],</span>
+
+    <span class="s2">&quot;init_arguments&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;p&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of interaction outside adjacent nodes&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;q&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot; probability of detected individuals interaction outside adjacent nodes&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;false_symptoms_rate&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;false_symptoms_recovery_rate&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;asymptomatic_rate&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;symptoms_manifest_rate&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;save_nodes&quot;</span><span class="p">:</span> <span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="p">},</span>
+
+    <span class="s2">&quot;model_parameters&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;beta&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span>  <span class="s2">&quot;rate of transmission (exposure)&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_reduction&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span>  <span class="s2">&quot;beta reduction&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_in_family&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;beta in family&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_A&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;beta A&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_A_in_family&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;beta A in family&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;sigma&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of infection (upon exposure)&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;gamma_In&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of recovery (upon infection)&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;gamma_Is&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of recovery (upon infection)&quot;</span><span class="p">),</span>
+        <span class="c1">#        &quot;gamma_Id&quot;: (0, &quot;rate of recovery (upon infection)&quot;),</span>
+        <span class="s2">&quot;mu&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of infection-related death&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;beta_D&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of transmission (exposure) for detected inds&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;mu_D&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of infection-related death for detected inds&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;theta_E&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of baseline testing for exposed individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;theta_Ia&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of baseline testing for Ia individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;theta_Is&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of baseline testing for Is individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;theta_In&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of baseline testing for In individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;test_rate&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="s2">&quot;test rate&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;phi_E&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of contact tracing testing for exposed individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;phi_Ia&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of contact tracing testing for Ia individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;phi_Is&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;rate of contact tracing testing for Is individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;psi_E&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of positive test results for exposed individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;psi_Ia&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of positive test results for Ia individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;psi_Is&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of positive test results for Is individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;psi_In&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of positive test results for In individuals&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;delta_n&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of entering Jn&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;delta_s&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability of entering Js&quot;</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># 2. propensities function</span>
+
+
+<div class="viewcode-block" id="calc_propensities">
+<a class="viewcode-back" href="../src_modules.html#extended_network_model.calc_propensities">[docs]</a>
+<span class="k">def</span> <span class="nf">calc_propensities</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">use_dict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute per-node daily transition probabilities for the extended model.</span>
+
+<span class="sd">    Returns a list of propensity arrays (one per transition) ordered to match</span>
+<span class="sd">    ``model.transitions``.  Each array has shape ``(num_nodes, 1)`` with</span>
+<span class="sd">    values in ``[0, 1]`` representing the probability that each node undergoes</span>
+<span class="sd">    the corresponding transition on the current day.</span>
+
+<span class="sd">    The function:</span>
+
+<span class="sd">    1. Calls ``model.prob_of_contact`` to obtain the per-node infection</span>
+<span class="sd">       probability ``P1`` from network contacts, and combines it with a</span>
+<span class="sd">       mass-action term ``P2`` (controlled by ``model.p``).</span>
+<span class="sd">    2. Computes propensities for every state → state transition defined in</span>
+<span class="sd">       ``model.transitions``, taking into account testing rates, detection</span>
+<span class="sd">       probabilities, symptom development, and mortality.</span>
+<span class="sd">    3. Ensures each node&#39;s propensities sum to 1 (clip to ``[0, 1]``).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: Active simulation-model instance with all parameters and</span>
+<span class="sd">            membership arrays set.</span>
+<span class="sd">        use_dict (bool, optional): Unused parameter retained for API</span>
+<span class="sd">            compatibility. Defaults to ``True``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list of numpy.ndarray: One propensity array per transition, each of</span>
+<span class="sd">        shape ``(num_nodes, 1)``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># STEP 1</span>
+    <span class="c1"># pre-calculate matrix multiplication terms that may be used in multiple propensity calculations,</span>
+    <span class="c1"># and check to see if their computation is necessary before doing the multiplication</span>
+
+    <span class="c1"># number of infectious nondetected contacts</span>
+    <span class="c1"># sum of all I states</span>
+    <span class="c1"># numContacts_I = np.zeros(shape=(model.num_nodes, 1))</span>
+    <span class="c1"># if any(model.beta):</span>
+    <span class="c1">#     infected = [</span>
+    <span class="c1">#         s for s in (STATES.I_n, STATES.I_a, STATES.I_s)</span>
+    <span class="c1">#         if model.current_state_count(s)</span>
+    <span class="c1">#     ]</span>
+    <span class="c1">#     if infected:</span>
+    <span class="c1">#         numContacts_I = model.num_contacts(infected)</span>
+
+    <span class="c1"># numContacts_Id = np.zeros(shape=(model.num_nodes, 1))</span>
+    <span class="c1"># if any(model.beta_D):</span>
+    <span class="c1">#     numContacts_Id = model.num_contacts(STATES.I_d)</span>
+
+    <span class="c1"># STEP 2</span>
+    <span class="c1"># create  propensities</span>
+    <span class="c1"># transition name: probability values</span>
+    <span class="c1"># see doc/Propensities.pdf</span>
+
+    <span class="c1"># compute P infection</span>
+    <span class="c1"># first part omit</span>
+        <span class="c1"># model.p * (</span>
+        <span class="c1">#     model.beta * numI +</span>
+        <span class="c1">#     model.q * model.beta_D * model.current_state_count(STATES.I_d)</span>
+        <span class="c1"># ) / model.current_N()</span>
+        <span class="c1"># + (1 - model.p)</span>
+
+    <span class="n">P1</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">prob_of_contact</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span>
+         <span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span>
+         <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span>
+         <span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span>
+         <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span>
+         <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span>
+         <span class="p">],</span>
+        <span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">,</span>
+            <span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">],</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">beta</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">beta_in_family</span>
+    <span class="p">)</span>
+
+    <span class="c1">#    P2 = model.prob_of_no_contact([STATES.I_d], model.beta_D)</span>
+    <span class="k">assert</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">beta_D</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span>
+
+    <span class="c1"># print(&quot;--&gt;&quot;, P1.shape, np.any(P1.flatten() &gt; 0), np.all(P1.flatten() &lt;= 1))</span>
+    <span class="c1"># print(P2.flatten())</span>
+    <span class="c1"># assert np.all(P2.flatten() == 0)</span>
+
+    <span class="c1">#    P_infection = model.prob_of_no_contact(</span>
+    <span class="c1">#        ([STATES.I_n, STATES.I_a, STATES.I_s], [STATES.I_d])</span>
+    <span class="c1">#        (model.beta, model.beta_D)</span>
+    <span class="c1">#    )</span>
+    <span class="c1">#    print(&quot;--&gt;&quot;, P_infection.shape, np.any(P_infection.flatten() &gt; 0), np.all(P_infection.flatten() &lt;= 1))</span>
+
+    <span class="n">N</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">current_N</span><span class="p">()</span>
+    <span class="n">numIn</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">)</span> <span class="o">+</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">numI</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span>
+        <span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">)</span> <span class="o">+</span> <span class="n">model</span><span class="o">.</span><span class="n">current_state_count</span><span class="p">(</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">)</span>
+
+    <span class="n">P2</span> <span class="o">=</span> <span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">beta</span> <span class="o">*</span> <span class="n">numI</span><span class="o">/</span><span class="n">N</span> <span class="o">+</span> <span class="n">model</span><span class="o">.</span><span class="n">beta_A</span> <span class="o">*</span> <span class="n">numIn</span><span class="o">/</span><span class="n">N</span><span class="p">)</span>
+
+    <span class="n">P_infection</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">model</span><span class="o">.</span><span class="n">p</span><span class="p">)</span><span class="o">*</span><span class="n">P1</span> <span class="o">+</span> <span class="n">model</span><span class="o">.</span><span class="n">p</span><span class="o">*</span><span class="n">P2</span>
+    <span class="c1">#    P_infection = P1 +</span>
+
+    <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">==</span> <span class="mi">6</span><span class="p">:</span>
+        <span class="n">is_superspread_edge</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_types</span> <span class="o">==</span> <span class="mi">31</span>
+        <span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_source</span><span class="p">[</span><span class="n">is_superspread_edge</span><span class="p">],</span>
+             <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">e_dest</span><span class="p">[</span><span class="n">is_superspread_edge</span><span class="p">])</span>
+        <span class="p">)</span>
+        <span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+
+        <span class="n">ss_infections</span> <span class="o">=</span> <span class="n">P_infection</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG SUPERSPREAD INF </span><span class="si">{</span><span class="n">ss_infections</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">ss_infections</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">nonzero_nodes</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ss_infections</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG SUPERSPREAD NONZERO </span><span class="si">{</span><span class="n">nonzero_nodes</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">ss_infections</span><span class="p">[</span><span class="n">ss_infections</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">S_or_S_s</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span> <span class="o">+</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">]</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">meaneprobs</span><span class="p">[</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="n">P_infection</span><span class="p">[</span><span class="n">S_or_S_s</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">medianeprobs</span><span class="p">[</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">P_infection</span><span class="p">[</span><span class="n">S_or_S_s</span> <span class="o">==</span> <span class="mi">1</span><span class="p">])</span>
+    <span class="c1">#    print(P_infection.shape)</span>
+
+    <span class="n">not_P_infection</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">P_infection</span>
+    <span class="c1"># assert np.all(P_infection &lt; 1.0)</span>
+    <span class="c1"># assert np.all((not_P_infection + P_infection) == 1)</span>
+
+    <span class="c1"># print(model.memberships[STATES.S_s].shape)</span>
+    <span class="c1"># print(P_infection.shape)</span>
+    <span class="c1"># print(not_P_infection.shape)</span>
+
+    <span class="c1"># print((model.memberships[STATES.S_s] * not_P_infection).shape)</span>
+    <span class="c1"># exit()</span>
+
+    <span class="c1">#    print(model.memberships[:, 0])</span>
+    <span class="c1"># state S_s</span>
+    <span class="n">propensity_S_s_to_E</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">P_infection</span>
+    <span class="n">propensity_S_s_to_S</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">not_P_infection</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">false_symptoms_recovery_rate</span><span class="p">)</span>
+    <span class="n">propensity_S_s_to_S_s</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">]</span> <span class="o">*</span>
+        <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_S_s_to_S</span> <span class="o">-</span> <span class="n">propensity_S_s_to_E</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+    <span class="c1"># clip them all before we solve overlap</span>
+
+    <span class="c1"># print(propensity_S_s_to_E.flatten())</span>
+    <span class="c1"># print(propensity_S_s_to_S.flatten())</span>
+    <span class="c1"># print(propensity_S_s_to_S_s.flatten())</span>
+    <span class="c1"># assert np.all((propensity_S_s_to_E + propensity_S_s_to_S +</span>
+    <span class="c1">#                propensity_S_s_to_S_s)[np.nonzero(model.memberships[STATES.S_s])] == 1)</span>
+
+    <span class="c1"># state S</span>
+    <span class="n">propensity_S_to_E</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span> <span class="o">*</span> <span class="n">P_infection</span>
+    <span class="n">propensity_S_to_S_s</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span> <span class="o">*</span> <span class="n">not_P_infection</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">false_symptoms_rate</span><span class="p">)</span>
+    <span class="n">propensity_S_to_S</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">]</span> <span class="o">*</span>
+        <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="p">(</span><span class="n">propensity_S_to_E</span> <span class="o">+</span> <span class="n">propensity_S_to_S_s</span><span class="p">)),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1">#    print(&quot;S-&gt;E&quot;, propensity_S_to_E[0])</span>
+    <span class="c1">#    print(&quot;S-&gt;Ss&quot;, propensity_S_to_S_s[0])</span>
+    <span class="c1">#    print(&quot;E+Ss&quot;, (propensity_S_to_E + propensity_S_to_S_s)[0])</span>
+    <span class="c1">#    print(&quot;E+Ss&quot;, (1.0 - (propensity_S_to_E + propensity_S_to_S_s))[0])</span>
+    <span class="c1">#    print(model.memberships[STATES.S][0])</span>
+    <span class="c1">#    print(&quot;S-&gt;S&quot;, propensity_S_to_S[0])</span>
+
+    <span class="c1"># state E</span>
+    <span class="n">propensity_E_to_E_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">theta_E</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_E</span>
+    <span class="n">propensity_E_to_I_n</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">sigma</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span>
+    <span class="n">propensity_E_to_I_a</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">sigma</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span><span class="p">)</span>
+    <span class="n">propensity_E_to_E</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_E_to_E_d</span> <span class="o">-</span>
+                                       <span class="n">propensity_E_to_I_n</span> <span class="o">-</span> <span class="n">propensity_E_to_I_a</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+    <span class="c1"># state I_n</span>
+    <span class="n">propensity_I_n_to_J_n</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">delta_n</span>
+    <span class="n">propensity_I_n_to_I_dn</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">theta_In</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_In</span>
+    <span class="n">propensity_I_n_to_I_n</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_n</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+            <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_n_to_J_n</span> <span class="o">-</span> <span class="n">propensity_I_n_to_I_dn</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state I_a</span>
+    <span class="n">propensity_I_a_to_I_da</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">theta_Ia</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_Ia</span>
+    <span class="n">propensity_I_a_to_I_s</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">symptoms_manifest_rate</span>
+    <span class="n">propensity_I_a_to_I_a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_a</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+            <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_a_to_I_da</span> <span class="o">-</span> <span class="n">propensity_I_a_to_I_s</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state I_s</span>
+    <span class="n">propensity_I_s_to_I_ds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">testable</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_Is</span>
+    <span class="n">propensity_I_s_to_J_s</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">delta_s</span><span class="p">,</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">propensity_I_s_to_I_ds</span><span class="p">)</span>
+    <span class="n">propensity_I_s_to_D_u</span> <span class="o">=</span> <span class="mf">0.0</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span>
+    <span class="c1">#    not_R_or_D = 1.0 - propensity_I_s_to_J_s - propensity_I_s_to_D_u</span>
+    <span class="n">propensity_I_s_to_I_s</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_s_to_J_s</span> <span class="o">-</span>
+                                         <span class="n">propensity_I_s_to_D_u</span> <span class="o">-</span> <span class="n">propensity_I_s_to_I_ds</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1">#print(&quot;DBG test propensity&quot;, propensity_I_s_to_I_ds[propensity_I_s_to_I_ds &gt; 0])</span>
+
+    <span class="c1"># state I_dn</span>
+    <span class="n">propensity_I_dn_to_J_dn</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">delta_n</span>
+    <span class="n">propensity_I_dn_to_D_d</span> <span class="o">=</span> <span class="mf">0.0</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">]</span>
+    <span class="n">propensity_I_dn_to_I_dn</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_dn</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+            <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_dn_to_J_dn</span> <span class="o">-</span> <span class="n">propensity_I_dn_to_D_d</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state I_ds</span>
+    <span class="n">propensity_I_ds_to_J_ds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">delta_s</span>
+    <span class="n">propensity_I_ds_to_D_d</span> <span class="o">=</span> <span class="mf">0.0</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">]</span>
+    <span class="n">propensity_I_ds_to_I_ds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_ds</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+            <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_ds_to_J_ds</span> <span class="o">-</span> <span class="n">propensity_I_ds_to_D_d</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state I_da</span>
+    <span class="n">propensity_I_da_to_I_ds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">symptoms_manifest_rate</span>
+    <span class="n">propensity_I_da_to_I_da</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_da</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_I_da_to_I_ds</span><span class="p">)</span>
+
+    <span class="c1"># state E_d</span>
+    <span class="n">propensity_E_d_to_I_dn</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">sigma</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span>
+    <span class="n">propensity_E_d_to_I_da</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">sigma</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">model</span><span class="o">.</span><span class="n">asymptomatic_rate</span><span class="p">)</span>
+    <span class="n">propensity_E_d_to_E_d</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E_d</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span>
+                                         <span class="o">-</span> <span class="n">propensity_E_d_to_I_dn</span>
+                                         <span class="o">-</span> <span class="n">propensity_E_d_to_I_da</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state J_s</span>
+    <span class="n">propensity_J_s_to_J_ds</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">testable</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_Is</span><span class="p">)</span>
+
+    <span class="n">propensity_J_s_to_R_u</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">gamma_Is</span><span class="p">,</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">propensity_J_s_to_J_ds</span><span class="p">)</span>
+    <span class="n">propensity_J_s_to_D_u</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">mu</span><span class="p">,</span>
+        <span class="mf">0.0</span><span class="p">,</span>
+        <span class="mi">1</span> <span class="o">-</span> <span class="n">propensity_J_s_to_J_ds</span> <span class="o">-</span> <span class="n">propensity_J_s_to_R_u</span><span class="p">)</span>
+    <span class="c1">#    not_R_or_D = 1.0 - propensity_J_s_to_R_u - propensity_J_s_to_D_u</span>
+    <span class="n">propensity_J_s_to_J_s</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_s</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_J_s_to_R_u</span> <span class="o">-</span>
+                                         <span class="n">propensity_J_s_to_D_u</span> <span class="o">-</span> <span class="n">propensity_J_s_to_J_ds</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state J_n</span>
+    <span class="n">propensity_J_n_to_R_u</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">gamma_In</span>
+    <span class="n">propensity_J_n_to_J_dn</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">]</span> <span class="o">*</span> \
+        <span class="n">model</span><span class="o">.</span><span class="n">theta_In</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">psi_In</span>
+    <span class="n">propensity_J_n_to_J_n</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_n</span><span class="p">]</span> <span class="o">*</span>
+        <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_J_n_to_R_u</span> <span class="o">-</span> <span class="n">propensity_J_n_to_J_dn</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state J_ds</span>
+    <span class="n">propensity_J_ds_to_R_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">gamma_Is</span>
+    <span class="n">propensity_J_ds_to_D_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">mu</span>
+    <span class="n">propensity_J_ds_to_J_ds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_ds</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+            <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_J_ds_to_R_d</span> <span class="o">-</span> <span class="n">propensity_J_ds_to_D_d</span><span class="p">),</span>
+        <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span>
+    <span class="p">)</span>
+
+    <span class="c1"># state J_dn</span>
+    <span class="n">propensity_J_dn_to_R_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">]</span> <span class="o">*</span> <span class="n">model</span><span class="o">.</span><span class="n">gamma_In</span>
+    <span class="n">propensity_J_dn_to_J_dn</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">J_dn</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
+        <span class="mf">1.0</span> <span class="o">-</span> <span class="n">propensity_J_dn_to_R_d</span><span class="p">)</span>
+
+    <span class="c1"># state R_d, R_u, D_d, D_u</span>
+    <span class="n">propensity_R_d_to_R_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">R_d</span><span class="p">]</span>
+    <span class="n">propensity_R_u_to_R_u</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">R_u</span><span class="p">]</span>
+    <span class="n">propensity_D_d_to_D_d</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_d</span><span class="p">]</span>
+    <span class="n">propensity_D_u_to_D_u</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">D_u</span><span class="p">]</span>
+
+    <span class="k">return</span> <span class="p">[</span>
+        <span class="n">propensity_S_s_to_E</span><span class="p">,</span>
+        <span class="n">propensity_S_s_to_S</span><span class="p">,</span>
+        <span class="n">propensity_S_s_to_S_s</span><span class="p">,</span>
+
+        <span class="n">propensity_S_to_E</span><span class="p">,</span>
+        <span class="n">propensity_S_to_S_s</span><span class="p">,</span>
+        <span class="n">propensity_S_to_S</span><span class="p">,</span>
+
+        <span class="n">propensity_E_to_E_d</span><span class="p">,</span>
+        <span class="n">propensity_E_to_I_n</span><span class="p">,</span>
+        <span class="n">propensity_E_to_I_a</span><span class="p">,</span>
+        <span class="n">propensity_E_to_E</span><span class="p">,</span>
+
+        <span class="n">propensity_I_n_to_J_n</span><span class="p">,</span>
+        <span class="n">propensity_I_n_to_I_dn</span><span class="p">,</span>
+        <span class="n">propensity_I_n_to_I_n</span><span class="p">,</span>
+
+        <span class="n">propensity_I_a_to_I_da</span><span class="p">,</span>
+        <span class="n">propensity_I_a_to_I_s</span><span class="p">,</span>
+        <span class="n">propensity_I_a_to_I_a</span><span class="p">,</span>
+
+        <span class="n">propensity_I_s_to_J_s</span><span class="p">,</span>
+        <span class="n">propensity_I_s_to_D_u</span><span class="p">,</span>
+        <span class="n">propensity_I_s_to_I_ds</span><span class="p">,</span>
+        <span class="n">propensity_I_s_to_I_s</span><span class="p">,</span>
+
+        <span class="n">propensity_I_ds_to_J_ds</span><span class="p">,</span>
+        <span class="n">propensity_I_ds_to_D_d</span><span class="p">,</span>
+        <span class="n">propensity_I_ds_to_I_ds</span><span class="p">,</span>
+
+        <span class="n">propensity_I_dn_to_J_dn</span><span class="p">,</span>
+        <span class="n">propensity_I_dn_to_D_d</span><span class="p">,</span>
+        <span class="n">propensity_I_dn_to_I_dn</span><span class="p">,</span>
+
+        <span class="n">propensity_I_da_to_I_ds</span><span class="p">,</span>
+        <span class="n">propensity_I_da_to_I_da</span><span class="p">,</span>
+
+        <span class="n">propensity_E_d_to_I_dn</span><span class="p">,</span>
+        <span class="n">propensity_E_d_to_I_da</span><span class="p">,</span>
+        <span class="n">propensity_E_d_to_E_d</span><span class="p">,</span>
+
+
+        <span class="n">propensity_J_s_to_R_u</span><span class="p">,</span>
+        <span class="n">propensity_J_s_to_D_u</span><span class="p">,</span>
+        <span class="n">propensity_J_s_to_J_ds</span><span class="p">,</span>
+        <span class="n">propensity_J_s_to_J_s</span><span class="p">,</span>
+
+        <span class="n">propensity_J_n_to_R_u</span><span class="p">,</span>
+        <span class="n">propensity_J_n_to_J_dn</span><span class="p">,</span>
+        <span class="n">propensity_J_n_to_J_n</span><span class="p">,</span>
+
+        <span class="n">propensity_J_ds_to_R_d</span><span class="p">,</span>
+        <span class="n">propensity_J_ds_to_D_d</span><span class="p">,</span>
+        <span class="n">propensity_J_ds_to_J_ds</span><span class="p">,</span>
+
+        <span class="n">propensity_J_dn_to_R_d</span><span class="p">,</span>
+        <span class="n">propensity_J_dn_to_J_dn</span><span class="p">,</span>
+
+        <span class="n">propensity_R_d_to_R_d</span><span class="p">,</span>
+        <span class="n">propensity_R_u_to_R_u</span><span class="p">,</span>
+        <span class="n">propensity_D_d_to_D_d</span><span class="p">,</span>
+        <span class="n">propensity_D_u_to_D_u</span>
+    <span class="p">]</span></div>
+
+
+
+<span class="c1"># 3. model class</span>
+<span class="n">ExtendedNetworkModel</span> <span class="o">=</span> <span class="n">create_custom_model</span><span class="p">(</span><span class="s2">&quot;ExtendedNetworkModel&quot;</span><span class="p">,</span>
+                                           <span class="o">**</span><span class="n">model_definition</span><span class="p">,</span>
+                                           <span class="n">calc_propensities</span><span class="o">=</span><span class="n">calc_propensities</span><span class="p">)</span>
+
+<span class="n">ExtendedDailyNetworkModel</span> <span class="o">=</span> <span class="n">create_custom_model</span><span class="p">(</span><span class="s2">&quot;ExtendedDailyNetworkModel&quot;</span><span class="p">,</span>
+                                                <span class="o">**</span><span class="n">model_definition</span><span class="p">,</span>
+                                                <span class="n">calc_propensities</span><span class="o">=</span><span class="n">calc_propensities</span><span class="p">,</span>
+                                                <span class="n">engine</span><span class="o">=</span><span class="n">DailyEngine</span><span class="p">)</span>
+
+<span class="n">ExtendedSequentialNetworkModel</span> <span class="o">=</span> <span class="n">create_custom_model</span><span class="p">(</span><span class="s2">&quot;ExtendedSequentialNetworkModel&quot;</span><span class="p">,</span>
+                                                     <span class="o">**</span><span class="n">model_definition</span><span class="p">,</span>
+                                                     <span class="n">calc_propensities</span><span class="o">=</span><span class="n">calc_propensities</span><span class="p">,</span>
+                                                     <span class="n">engine</span><span class="o">=</span><span class="n">SequentialEngine</span><span class="p">)</span>
+
+
+<span class="n">TGMNetworkModel</span> <span class="o">=</span> <span class="n">create_custom_model</span><span class="p">(</span><span class="s2">&quot;TGMNetworkModel&quot;</span><span class="p">,</span>
+                                      <span class="o">**</span><span class="n">model_definition</span><span class="p">,</span>
+                                      <span class="n">calc_propensities</span><span class="o">=</span><span class="n">calc_propensities</span><span class="p">,</span>
+                                      <span class="n">engine</span><span class="o">=</span><span class="n">EngineM</span><span class="p">)</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>plot_experiments &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>plot_experiments</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for plot_experiments</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Command-line script for plotting MAIS simulation results.</span>
+
+<span class="sd">Reads one or more simulation result files (``.csv``, ``.zip``, or</span>
+<span class="sd">``.feather``), computes aggregate statistics (median/mean with IQR or SD</span>
+<span class="sd">shading), and saves the resulting plot.  An optional fit/observed-data curve</span>
+<span class="sd">can be overlaid.</span>
+
+<span class="sd">Typical usage::</span>
+
+<span class="sd">    python plot_experiments.py results_a.zip results_b.zip \\</span>
+<span class="sd">        --column I_d --out_file plot.png --label_names &quot;Scenario A,Scenario B&quot;</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">glob</span>
+<span class="kn">import</span> <span class="nn">zipfile</span>
+
+<span class="kn">import</span> <span class="nn">click</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s1">&#39;../src&#39;</span><span class="p">))</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">seaborn</span> <span class="k">as</span> <span class="nn">sns</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+
+
+<span class="k">def</span> <span class="nf">_add_id_column</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">fname</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Add an ``&quot;id&quot;`` column to ``df`` derived from the base file name.</span>
+
+<span class="sd">    The ``&quot;id&quot;`` value is the base name of ``fname`` with the ``.csv``</span>
+<span class="sd">    extension removed.  The column is added in-place.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        df (pandas.DataFrame): DataFrame to modify in-place.</span>
+<span class="sd">        fname (str): File path whose base name (without ``.csv``) becomes the</span>
+<span class="sd">            identifier.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">fname</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">fname</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;.csv&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">fname</span>
+
+
+<div class="viewcode-block" id="process_zip">
+<a class="viewcode-back" href="../scripts.html#plot_experiments.process_zip">[docs]</a>
+<span class="k">def</span> <span class="nf">process_zip</span><span class="p">(</span><span class="n">zip_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">save_feather</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract all CSVs from a ZIP archive and concatenate them into one DataFrame.</span>
+
+<span class="sd">    Creates a temporary directory next to the ZIP file, extracts all</span>
+<span class="sd">    ``*.csv`` entries, reads them (ignoring comment lines starting with</span>
+<span class="sd">    ``#``), adds an ``&quot;id&quot;`` column to each, and concatenates the results.</span>
+<span class="sd">    The temporary directory is removed in a ``finally`` block regardless of</span>
+<span class="sd">    errors.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        zip_path (str): Path to the ``.zip`` archive produced by</span>
+<span class="sd">            ``run_multi_experiment.py``.</span>
+<span class="sd">        save_feather (bool): If ``True``, the concatenated DataFrame is also</span>
+<span class="sd">            saved as a ``.feather`` file with the same base name as the ZIP.</span>
+<span class="sd">            Defaults to ``False``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pandas.DataFrame: Concatenated DataFrame with all replicate results</span>
+<span class="sd">        and an ``&quot;id&quot;`` column identifying each source file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">tmp_dir</span> <span class="o">=</span> <span class="n">zip_path</span> <span class="o">+</span> <span class="s1">&#39;.tmp&#39;</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">tmp_dir</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span><span class="n">zip_path</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">zip_ref</span><span class="p">:</span>
+            <span class="n">zip_ref</span><span class="o">.</span><span class="n">extractall</span><span class="p">(</span><span class="n">tmp_dir</span><span class="p">)</span>
+
+        <span class="n">csv_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">file</span> <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">tmp_dir</span><span class="p">,</span> <span class="s1">&#39;*.csv&#39;</span><span class="p">))]</span>
+
+        <span class="n">dfs</span> <span class="o">=</span> <span class="p">{</span><span class="n">cf</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">comment</span><span class="o">=</span><span class="s1">&#39;#&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">cf</span> <span class="ow">in</span> <span class="n">csv_files</span><span class="p">}</span>
+
+        <span class="n">out_dfs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">fname</span><span class="p">,</span> <span class="n">df</span> <span class="ow">in</span> <span class="n">dfs</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">_add_id_column</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
+            <span class="n">out_dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">out_dfs</span><span class="p">,</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">save_feather</span><span class="p">:</span>
+            <span class="n">res</span><span class="o">.</span><span class="n">to_feather</span><span class="p">(</span><span class="n">zip_path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;.zip&#39;</span><span class="p">,</span> <span class="s1">&#39;.feather&#39;</span><span class="p">))</span>
+
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="c1"># clean temp dir</span>
+        <span class="n">csv_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">file</span> <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">tmp_dir</span><span class="p">,</span> <span class="s1">&#39;*.csv&#39;</span><span class="p">))]</span>
+        <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">csv_files</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+
+        <span class="n">os</span><span class="o">.</span><span class="n">rmdir</span><span class="p">(</span><span class="n">tmp_dir</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">res</span></div>
+
+
+
+<div class="viewcode-block" id="plot_dfs">
+<a class="viewcode-back" href="../scripts.html#plot_experiments.plot_dfs">[docs]</a>
+<span class="k">def</span> <span class="nf">plot_dfs</span><span class="p">(</span><span class="n">dfs</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">figsize</span><span class="p">,</span> <span class="n">out_path</span><span class="p">,</span> <span class="n">xlabel</span><span class="p">,</span> <span class="n">ylabel</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ymax</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_median</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+             <span class="n">use_sd</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">fit_me</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">show_whole_fit</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">day_indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">day_labels</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create and save a multi-series line plot from a list of DataFrames.</span>
+
+<span class="sd">    Each DataFrame in ``dfs`` is plotted as one line with an uncertainty band</span>
+<span class="sd">    (IQR or SD).  An optional fit/observed data curve can be overlaid.</span>
+<span class="sd">    Axis limits are inferred from the data unless overridden.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        dfs (list[pandas.DataFrame]): List of result DataFrames, each</span>
+<span class="sd">            containing at minimum a ``&quot;T&quot;`` column and the column named by</span>
+<span class="sd">            ``column``.</span>
+<span class="sd">        column (str): Name of the y-axis column to plot.</span>
+<span class="sd">        figsize (tuple[int, int]): Figure size ``(width, height)`` in inches.</span>
+<span class="sd">        out_path (str): File path where the plot image is saved.</span>
+<span class="sd">        xlabel (str): Label for the x-axis.</span>
+<span class="sd">        ylabel (str): Label for the y-axis.</span>
+<span class="sd">        labels (list[str] or None): Legend labels, one per DataFrame in</span>
+<span class="sd">            ``dfs``.  Defaults to ``None`` (no legend).</span>
+<span class="sd">        title (str or None): Plot title.  Defaults to ``None``.</span>
+<span class="sd">        ymax (int or None): Upper limit of the y-axis.  Inferred from data</span>
+<span class="sd">            if ``None``.  Defaults to ``None``.</span>
+<span class="sd">        use_median (bool): Use median as the central estimator when</span>
+<span class="sd">            ``True``; use mean otherwise.  Defaults to ``True``.</span>
+<span class="sd">        use_sd (bool): Use standard-deviation shading when ``True``; use</span>
+<span class="sd">            interquartile-range shading otherwise.  Defaults to ``False``.</span>
+<span class="sd">        fit_me (pandas.DataFrame or None): Optional DataFrame with columns</span>
+<span class="sd">            ``&quot;T&quot;`` and ``column`` representing observed/fit data to overlay</span>
+<span class="sd">            as an unshaded line.  Defaults to ``None``.</span>
+<span class="sd">        show_whole_fit (bool): If ``True``, include ``fit_me`` in the x-axis</span>
+<span class="sd">            range calculation.  Defaults to ``False``.</span>
+<span class="sd">        day_indices (list[int] or None): Positions along the x-axis at which</span>
+<span class="sd">            to place custom tick marks.  Must be combined with</span>
+<span class="sd">            ``day_labels``.  Defaults to ``None``.</span>
+<span class="sd">        day_labels (list[str] or None): String labels for the ticks at</span>
+<span class="sd">            ``day_indices``.  Defaults to ``None``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
+
+    <span class="n">estimator</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">median</span> <span class="k">if</span> <span class="n">use_median</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span>
+    <span class="n">ci</span> <span class="o">=</span> <span class="s1">&#39;sd&#39;</span> <span class="k">if</span> <span class="n">use_sd</span> <span class="k">else</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">title</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">14</span><span class="p">)</span>
+
+    <span class="c1"># list of all dfs including the fit data - to infer correct plot limits</span>
+    <span class="n">lim_dfs</span> <span class="o">=</span> <span class="n">dfs</span> <span class="k">if</span> <span class="n">fit_me</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">dfs</span> <span class="o">+</span> <span class="p">[</span><span class="n">fit_me</span><span class="p">]</span>
+    <span class="n">xlim_dfs</span> <span class="o">=</span> <span class="n">lim_dfs</span> <span class="k">if</span> <span class="n">show_whole_fit</span> <span class="k">else</span> <span class="n">dfs</span>
+
+    <span class="n">xmin</span> <span class="o">=</span> <span class="nb">min</span><span class="p">([</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">for</span> <span class="n">df</span> <span class="ow">in</span> <span class="n">xlim_dfs</span><span class="p">])</span>
+    <span class="n">xmax</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">for</span> <span class="n">df</span> <span class="ow">in</span> <span class="n">xlim_dfs</span><span class="p">])</span>
+
+    <span class="n">ymax</span> <span class="o">=</span> <span class="n">ymax</span> <span class="k">if</span> <span class="n">ymax</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">max</span><span class="p">([</span><span class="n">df</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">for</span> <span class="n">df</span> <span class="ow">in</span> <span class="n">lim_dfs</span><span class="p">])</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylim</span><span class="p">(</span><span class="n">ymin</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ymax</span><span class="o">=</span><span class="n">ymax</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlim</span><span class="p">(</span><span class="n">xmin</span><span class="o">=</span><span class="n">xmin</span><span class="p">,</span> <span class="n">xmax</span><span class="o">=</span><span class="n">xmax</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">df</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dfs</span><span class="p">):</span>
+
+        <span class="n">label</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">label</span> <span class="o">=</span> <span class="n">labels</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> 
+        <span class="n">sns</span><span class="o">.</span><span class="n">lineplot</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="n">column</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">df</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span>
+                     <span class="n">estimator</span><span class="o">=</span><span class="n">estimator</span><span class="p">,</span> <span class="n">errorbar</span><span class="o">=</span><span class="n">ci</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">)</span>
+        
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">use_sd</span><span class="p">:</span>
+            <span class="n">df_stats</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="s2">&quot;T&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">describe</span><span class="p">()</span>
+            <span class="n">q1</span> <span class="o">=</span> <span class="n">df_stats</span><span class="p">[</span><span class="n">column</span><span class="p">][</span><span class="s2">&quot;25%&quot;</span><span class="p">]</span>
+            <span class="n">q3</span> <span class="o">=</span> <span class="n">df_stats</span><span class="p">[</span><span class="n">column</span><span class="p">][</span><span class="s2">&quot;75%&quot;</span><span class="p">]</span>
+
+            <span class="n">ax</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">(),</span> <span class="n">q1</span><span class="p">,</span> <span class="n">q3</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;_nolegend_&#39;</span><span class="p">)</span>
+            
+    <span class="k">if</span> <span class="n">ax</span><span class="o">.</span><span class="n">legend_</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">legend_</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">fit_me</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">fit_me</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">],</span> <span class="n">fit_me</span><span class="p">[</span><span class="n">column</span><span class="p">])</span>
+
+    
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="n">xlabel</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="n">ylabel</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">day_indices</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">([])</span>
+
+        <span class="n">ax</span><span class="o">.</span><span class="n">xaxis</span><span class="o">.</span><span class="n">set_minor_locator</span><span class="p">(</span><span class="n">plt</span><span class="o">.</span><span class="n">FixedLocator</span><span class="p">(</span><span class="n">day_indices</span><span class="p">))</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">xaxis</span><span class="o">.</span><span class="n">set_minor_formatter</span><span class="p">(</span><span class="n">plt</span><span class="o">.</span><span class="n">FixedFormatter</span><span class="p">(</span><span class="n">day_labels</span><span class="p">))</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">which</span><span class="o">=</span><span class="s2">&quot;minor&quot;</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;--&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">setp</span><span class="p">(</span><span class="n">ax</span><span class="o">.</span><span class="n">xaxis</span><span class="o">.</span><span class="n">get_minorticklabels</span><span class="p">(),</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">70</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper right&quot;</span><span class="p">,</span> <span class="n">framealpha</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+    <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="n">out_path</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@click</span><span class="o">.</span><span class="n">command</span><span class="p">()</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;plot_files&#39;</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--label_names&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Labels for each file to show in legend (separated by comma), &quot;</span>
+                                                  <span class="s2">&quot;called as --label_names l_1,l_2, ... &quot;</span>
+                                                  <span class="s2">&quot;If --fit_me is used, the last label in this argument is the label of&quot;</span>
+                                                  <span class="s2">&quot; the fit data.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--out_file&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;./plot_out.png&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Path where to save the plot.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--fit_me&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Path to a .csv file with fit data.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--show_whole_fit/--show_partial_fit&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;If true, plot the whole fit data on the x&quot;</span>
+                                                                         <span class="s2">&quot;axis (may be longer than other data).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--title&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Title of the plot.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--column&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;all_infected&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Column to use for plotting.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--zip_to_feather/--no_zip_to_feather&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;If True, save processed .zips to .feather. &quot;</span>
+                                                                          <span class="s2">&quot;The file name is the same except the &quot;</span>
+                                                                          <span class="s2">&quot;extension.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--figsize&#39;</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Size of the plot (specified without commas: --figsize 6 5).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--ymax&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Y axis upper limit. By default the limit is inferred from source&quot;</span>
+                                                     <span class="s2">&quot;data.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--xlabel&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;Day&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;X axis label.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--ylabel&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Y axis label.&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--use_median/--use_mean&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Use median or mean in the plot (default median).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--use_sd/--use_iqr&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Use sd or iqr for shades (default iqr).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--day_indices&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Use dates on x axis - maps indices to labels (e.g. 5,36,66).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--day_labels&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Use dates on x axis - string labels (e.g. &quot;</span>
+                                                 <span class="s2">&quot;</span><span class="se">\&quot;</span><span class="s2">March 1,April 1,May 1</span><span class="se">\&quot;</span><span class="s2">).&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--nodes_counts&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Comma separated nodes_counts. If provided, all &#39;all_infected&#39; values are normalized to 100 000 individuals. Other columns are untouched! fit_me is not normalized!!!&quot;</span><span class="p">)</span>
+<span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--infected_states&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;I_n,I_a,I_s,E,J_n,J_s&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Comma separated list of infected states.&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="n">plot_files</span><span class="p">,</span> <span class="n">label_names</span><span class="p">,</span> <span class="n">out_file</span><span class="p">,</span> <span class="n">fit_me</span><span class="p">,</span> <span class="n">show_whole_fit</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">zip_to_feather</span><span class="p">,</span> <span class="n">figsize</span><span class="p">,</span> <span class="n">ymax</span><span class="p">,</span> <span class="n">xlabel</span><span class="p">,</span>
+        <span class="n">ylabel</span><span class="p">,</span> <span class="n">use_median</span><span class="p">,</span> <span class="n">use_sd</span><span class="p">,</span> <span class="n">day_indices</span><span class="p">,</span> <span class="n">day_labels</span><span class="p">,</span> <span class="n">nodes_counts</span><span class="p">,</span> <span class="n">infected_states</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot; Create plot using an arbitrary number of input files. Optionally, plot a fit curve specified by --fit_me</span>
+
+<span class="sd">    \b</span>
+<span class="sd">    PLOT_FILES   name of the input files - either .csv, .zip or .feather</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    
+    <span class="n">infected_states</span> <span class="o">=</span> <span class="n">infected_states</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+    
+    <span class="k">if</span> <span class="n">ylabel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ylabel</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Number of cases (</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">)&quot;</span> 
+    
+    <span class="k">if</span> <span class="n">label_names</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">label_names</span> <span class="o">=</span> <span class="n">label_names</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">pass</span>
+        <span class="c1"># def clean_name(filename):</span>
+        <span class="c1">#     filename = filename.split(&#39;/&#39;)[-1]</span>
+        <span class="c1">#     filename = filename[::-1].split(&quot;.&quot;, 1)[-1][::-1]  # removes last suffix</span>
+        <span class="c1">#     return filename.replace(&quot;history&quot;, &quot;&quot;).replace(&quot;MODEL&quot;,&quot;&quot;)</span>
+        <span class="c1"># label_names = list(map(</span>
+        <span class="c1">#     lambda x: clean_name(x),</span>
+        <span class="c1">#     plot_files</span>
+        <span class="c1"># ))</span>
+
+    <span class="k">if</span> <span class="n">day_indices</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">day_labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">day_indices</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">day_labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;Both --day_indices and --day_labels must be &quot;</span> \
+                                                                   <span class="s2">&quot;passed to the script if string x axis labels are &quot;</span> \
+                                                                   <span class="s2">&quot;used.&quot;</span>
+        <span class="n">day_labels</span> <span class="o">=</span> <span class="n">day_labels</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+
+        <span class="c1"># check if indices are valid</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">day_indices</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">day_indices</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)]</span>
+        <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Argument --day_indices must be a comma separated list of ints (e.g. 5,10,25)&quot;</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">e</span>
+
+        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">day_labels</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">day_indices</span><span class="p">),</span> <span class="s2">&quot;Arguments --day_indices and --day_labels must have the same&quot;</span> \
+                                                    <span class="s2">&quot;number of values.&quot;</span>
+
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">plot_files</span><span class="p">),</span> <span class="s2">&quot;No input files were passed to the script.&quot;</span>
+
+    <span class="k">if</span> <span class="n">nodes_counts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">nodes_counts</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">count</span><span class="p">)</span> <span class="k">for</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">nodes_counts</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)]</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;--nodes_counts should be comma separated integers.&quot;</span><span class="p">)</span>
+            <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+
+    <span class="n">dfs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">file</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">plot_files</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Processing file </span><span class="si">{</span><span class="n">file</span><span class="si">}</span><span class="s2">...&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">file</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;.feather&#39;</span><span class="p">):</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_feather</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">file</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;.zip&#39;</span><span class="p">):</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">process_zip</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">save_feather</span><span class="o">=</span><span class="n">zip_to_feather</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">file</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;.csv&#39;</span><span class="p">):</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">file</span><span class="p">,</span>  <span class="n">comment</span><span class="o">=</span><span class="s1">&#39;#&#39;</span><span class="p">)</span>
+            <span class="n">_add_id_column</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">file</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported file: </span><span class="si">{</span><span class="n">file</span><span class="si">}</span><span class="s2">, supported extensions - .zip, .feather&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">column</span> <span class="o">==</span> <span class="s2">&quot;all_infected&quot;</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">all_inf</span> <span class="ow">in</span> <span class="p">(</span>
+                <span class="n">infected_states</span><span class="p">,</span> 
+                <span class="p">[</span><span class="s2">&quot;I_n&quot;</span><span class="p">,</span><span class="s2">&quot;I_a&quot;</span><span class="p">,</span><span class="s2">&quot;I_s&quot;</span><span class="p">,</span><span class="s2">&quot;E&quot;</span><span class="p">,</span><span class="s2">&quot;J_n&quot;</span><span class="p">,</span><span class="s2">&quot;J_s&quot;</span><span class="p">],</span> <span class="c1"># for infection spread</span>
+                <span class="p">[</span><span class="s2">&quot;I&quot;</span><span class="p">],</span> <span class="c1"># for SIR model</span>
+                <span class="p">[</span><span class="s2">&quot;Active&quot;</span><span class="p">]</span> <span class="c1"># for Tipping model</span>
+            <span class="p">):</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;all_infected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">all_inf</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+                <span class="k">except</span><span class="p">:</span>
+                    <span class="k">continue</span>
+                <span class="k">break</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;cannot initialize target column&quot;</span><span class="p">)</span>
+                
+        <span class="k">if</span> <span class="n">nodes_counts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span> 
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;all_infected&quot;</span><span class="p">]</span> <span class="o">/=</span> <span class="n">nodes_counts</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;all_infected&quot;</span><span class="p">]</span> <span class="o">*=</span> <span class="mi">100000</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Divided by </span><span class="si">{</span><span class="n">nodes_counts</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">fit_me</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Reading fit file - </span><span class="si">{</span><span class="n">fit_me</span><span class="si">}</span><span class="s2">...&quot;</span><span class="p">)</span>
+        <span class="n">fit_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">fit_me</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">fit_df</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;All files processed.&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Creating plot file...&quot;</span><span class="p">)</span>
+
+    <span class="n">plot_dfs</span><span class="p">(</span><span class="n">dfs</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">figsize</span><span class="p">,</span> <span class="n">out_file</span><span class="p">,</span> <span class="n">xlabel</span><span class="p">,</span> <span class="n">ylabel</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="n">label_names</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span> <span class="n">ymax</span><span class="o">=</span><span class="n">ymax</span><span class="p">,</span>
+             <span class="n">use_median</span><span class="o">=</span><span class="n">use_median</span><span class="p">,</span> <span class="n">use_sd</span><span class="o">=</span><span class="n">use_sd</span><span class="p">,</span> <span class="n">day_indices</span><span class="o">=</span><span class="n">day_indices</span><span class="p">,</span> <span class="n">day_labels</span><span class="o">=</span><span class="n">day_labels</span><span class="p">,</span> <span class="n">fit_me</span><span class="o">=</span><span class="n">fit_df</span><span class="p">,</span>
+             <span class="n">show_whole_fit</span><span class="o">=</span><span class="n">show_whole_fit</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Plot file saved to </span><span class="si">{</span><span class="n">out_file</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run</span><span class="p">()</span>
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

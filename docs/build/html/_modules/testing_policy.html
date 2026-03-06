@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>testing_policy &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>testing_policy</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for testing_policy</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Testing policy for the MAIS epidemic simulation.</span>
+
+<span class="sd">This module defines :class:`TestingPolicy`, which implements</span>
+<span class="sd">symptom-driven PCR testing, isolation of detected cases, and the</span>
+<span class="sd">release procedure after isolation ends.  It tracks daily test counts,</span>
+<span class="sd">positive/negative results, and active-case statistics.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">from</span> <span class="nn">models.agent_based_network_model</span> <span class="kn">import</span> <span class="n">STATES</span>
+
+<span class="kn">from</span> <span class="nn">policies.depo</span> <span class="kn">import</span> <span class="n">Depo</span>
+<span class="kn">from</span> <span class="nn">policies.quarantine_coefs</span> <span class="kn">import</span> <span class="n">QUARANTINE_COEFS</span>
+
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">cfgs</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+
+
+<div class="viewcode-block" id="TestingPolicy">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy">[docs]</a>
+<span class="k">class</span> <span class="nc">TestingPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Policy for symptom-driven testing and case isolation.</span>
+
+<span class="sd">    Individuals with symptoms seek testing with a configurable probability</span>
+<span class="sd">    (``theta_Is``).  Positively tested nodes are placed into isolation</span>
+<span class="sd">    for ``duration`` days.  Nodes are retested at the end of isolation;</span>
+<span class="sd">    those still ill remain for an additional two days unless</span>
+<span class="sd">    ``auto_recover`` is enabled.</span>
+
+<span class="sd">    Statistics collected per time-step:</span>
+
+<span class="sd">    * ``all_tests``       – total tests performed.</span>
+<span class="sd">    * ``positive_tests``  – tests with a positive result.</span>
+<span class="sd">    * ``negative_tests``  – tests with a negative result.</span>
+<span class="sd">    * ``I_d``             – active (detected) cases.</span>
+<span class="sd">    * ``cum_I_d``         – cumulative detected cases.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        graph: The contact network graph object.</span>
+<span class="sd">        model: The epidemic model instance.</span>
+<span class="sd">        config_file (str, optional): Path to an INI-style configuration</span>
+<span class="sd">            file.  The ``[ISOLATION]`` section may contain:</span>
+
+<span class="sd">            * ``duration`` (int) – isolation length in days (default 10).</span>
+<span class="sd">            * ``auto_recover`` (str) – ``&quot;Yes&quot;`` to skip the exit test</span>
+<span class="sd">              and release nodes automatically (default ``&quot;No&quot;``).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="TestingPolicy.__init__">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the testing policy.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            graph: The contact network graph object.</span>
+<span class="sd">            model: The epidemic model instance.</span>
+<span class="sd">            config_file (str, optional): Path to a configuration file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="c1"># how many times the node was tested</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">node_tested</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_all_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_negative_tests</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_Id</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>  <span class="c1"># active cases</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_cum_Id</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="mi">300</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="c1"># day of first symptoms</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_symptoms</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="mi">10</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">init_deposit</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">config_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">cf</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">()</span>
+            <span class="n">cf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span>
+            <span class="n">my_config</span> <span class="o">=</span> <span class="n">cf</span><span class="o">.</span><span class="n">section_as_dict</span><span class="p">(</span><span class="s2">&quot;ISOLATION&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="n">my_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="o">=</span> <span class="n">my_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                <span class="s2">&quot;auto_recover&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;Yes&quot;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span> <span class="k">else</span> <span class="s2">&quot;No&quot;</span>
+            <span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.init_deposit">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.init_deposit">[docs]</a>
+    <span class="k">def</span> <span class="nf">init_deposit</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the isolation deposit and quarantine coefficients.</span>
+
+<span class="sd">        Creates a :class:`~policies.depo.Depo` sized to the graph and</span>
+<span class="sd">        assigns quarantine coefficients from the graph if available,</span>
+<span class="sd">        otherwise falls back to the module-level defaults.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># depo of quarantined nodes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depo</span> <span class="o">=</span> <span class="n">Depo</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="n">QUARANTINE_COEFS</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">QUARANTINE_COEFS</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.quarantine_nodes">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.quarantine_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">quarantine_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">detected_nodes</span><span class="p">,</span> <span class="n">last_contacts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Place detected nodes into isolation and modify graph layers.</span>
+
+<span class="sd">        Newly detected nodes (those not already isolated) have their</span>
+<span class="sd">        contact layers suppressed via the quarantine coefficients.</span>
+<span class="sd">        All provided nodes are then locked into the deposit.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            detected_nodes (numpy.ndarray): Indices of nodes to isolate.</span>
+<span class="sd">            last_contacts (bool): If ``True``, the isolation duration is</span>
+<span class="sd">                shortened to account for time already elapsed since the</span>
+<span class="sd">                node&#39;s last known contact.  Defaults to ``False``.</span>
+<span class="sd">            duration (int, optional): Override the default isolation</span>
+<span class="sd">                duration.  Uses ``self.duration`` when ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+
+            <span class="n">new_detected_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">filter_locked</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">modify_layers_for_nodes</span><span class="p">(</span><span class="n">new_detected_nodes</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">coefs</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">duration</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">duration</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">duration</span>
+            <span class="k">if</span> <span class="n">last_contacts</span><span class="p">:</span>
+                <span class="n">sentences</span> <span class="o">=</span> <span class="n">duration</span> <span class="o">-</span> \
+                    <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_contact</span><span class="p">[</span><span class="n">detected_nodes</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">sentences</span> <span class="o">=</span> <span class="n">duration</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">detected_nodes</span><span class="p">,</span> <span class="n">sentences</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">detected_nodes</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;is beeing locked for </span><span class="si">{</span><span class="n">sentences</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">isinstance</span><span class="p">(</span><span class="n">sentences</span><span class="p">,</span><span class="w"> </span><span class="nb">int</span><span class="p">)</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="n">sentences</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">detected_nodes</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2"> days&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.tick">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.tick">[docs]</a>
+    <span class="k">def</span> <span class="nf">tick</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the isolation deposit by one day and return released nodes.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Indices of nodes released from isolation today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">tick_and_get_released</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">released</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.release_nodes">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.release_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">release_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">released</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore graph edges for nodes leaving isolation.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            released (numpy.ndarray): Indices of nodes to release.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DBG </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> Released nodes: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">released</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">recover_edges_for_nodes</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">released</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;is released from quarantine/isolation.&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.to_df">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create a DataFrame containing daily testing statistics.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: DataFrame indexed by time ``T`` with</span>
+<span class="sd">            columns ``all_tests``, ``positive_tests``,</span>
+<span class="sd">            ``negative_tests``, ``I_d`` (active cases), ``cum_I_d``</span>
+<span class="sd">            (cumulative detected cases), and ``day``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">start_day</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span> <span class="o">+</span>
+                      <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">start_day</span><span class="p">)</span>  <span class="c1"># -1 + 1</span>
+        <span class="n">policy_name</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="sa">f</span><span class="s2">&quot;all_tests&quot;</span><span class="p">:</span>  <span class="bp">self</span><span class="o">.</span><span class="n">stat_all_tests</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;positive_tests&quot;</span><span class="p">:</span>  <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_tests</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;negative_tests&quot;</span><span class="p">:</span>  <span class="bp">self</span><span class="o">.</span><span class="n">stat_negative_tests</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;I_d&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_Id</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span>
+            <span class="sa">f</span><span class="s2">&quot;cum_I_d&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stat_cum_Id</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+        <span class="p">}</span>
+        <span class="n">columns</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">&#39;T&#39;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.stop">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.stop">[docs]</a>
+    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop quarantining new nodes.</span>
+
+<span class="sd">        After calling ``stop``, the policy will continue to manage</span>
+<span class="sd">        nodes already in isolation but will not place any new nodes</span>
+<span class="sd">        into isolation.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># just finish necessary, but do not qurantine new nodes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.process_detected_nodes">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.process_detected_nodes">[docs]</a>
+    <span class="k">def</span> <span class="nf">process_detected_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Put detected nodes into isolation and handle releases.</span>
+
+<span class="sd">        Advances the deposit by one tick, filters out nodes that died</span>
+<span class="sd">        during isolation, places ``target_nodes`` into isolation, and</span>
+<span class="sd">        performs exit testing (or auto-recovers) for nodes whose</span>
+<span class="sd">        isolation period has ended.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            target_nodes (numpy.ndarray): Indices of nodes detected</span>
+<span class="sd">                (positive test result) today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">released</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tick</span><span class="p">()</span>
+        <span class="c1"># dead are those who died during qurantine/isolation</span>
+        <span class="n">released</span><span class="p">,</span> <span class="n">dead</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_dead</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">quarantine_nodes</span><span class="p">(</span><span class="n">target_nodes</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_recover</span><span class="p">:</span>
+            <span class="n">recovered</span><span class="p">,</span> <span class="n">still_ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">released</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">depo</span><span class="o">.</span><span class="n">lock_up</span><span class="p">(</span><span class="n">still_ill</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">still_ill</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;will wait in quarantine/isolation another 2 days.&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># autorecover</span>
+            <span class="n">recovered</span> <span class="o">=</span> <span class="n">released</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">recovered</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">recovered</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;releasing </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">recovered</span><span class="p">)</span><span class="si">}</span><span class="s2"> nodes from isolation&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">recovered</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">dead</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;releasing </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">dead</span><span class="p">)</span><span class="si">}</span><span class="s2"> dead nodes from isolation&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">release_nodes</span><span class="p">(</span><span class="n">dead</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">dead</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.first_day_setup">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.first_day_setup">[docs]</a>
+    <span class="k">def</span> <span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Fill statistics arrays with zeros for all days before the policy starts.</span>
+
+<span class="sd">        Called automatically on the first invocation of ``run``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># fill the days before start by zeros</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_all_tests</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_tests</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_negative_tests</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_Id</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_cum_Id</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_day</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.update_first_symptoms">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.update_first_symptoms">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_first_symptoms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Record the current time-step as the first day of symptoms for newly symptomatic nodes.</span>
+
+<span class="sd">        Nodes that are symptomatic (state ``I_s``) for the first time</span>
+<span class="sd">        today have ``self.first_symptoms`` set to the current time ``t``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># nodes with symptoms</span>
+        <span class="n">is_nodes</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">I_s</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        <span class="c1"># day of first symptoms of nodes with symptoms</span>
+        <span class="n">first_symptoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_symptoms</span><span class="p">[</span><span class="n">is_nodes</span><span class="p">]</span>
+        <span class="c1"># nodes with new symptoms</span>
+        <span class="n">is_nodes</span><span class="p">[</span><span class="n">is_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">first_symptoms</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first_symptoms</span><span class="p">[</span><span class="n">is_nodes</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.filter_dead">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.filter_dead">[docs]</a>
+    <span class="k">def</span> <span class="nf">filter_dead</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Split a node array into alive and dead subsets.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Indices of nodes to filter.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple[numpy.ndarray, numpy.ndarray]: A pair ``(alive, dead)``</span>
+<span class="sd">            where ``alive`` contains nodes not in state ``D`` and</span>
+<span class="sd">            ``dead`` contains nodes in state ``D``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">is_not_dead</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D</span>
+        <span class="k">return</span> <span class="n">nodes</span><span class="p">[</span><span class="n">is_not_dead</span><span class="p">],</span> <span class="n">nodes</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">logical_not</span><span class="p">(</span><span class="n">is_not_dead</span><span class="p">)]</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.select_test_candidates">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.select_test_candidates">[docs]</a>
+    <span class="k">def</span> <span class="nf">select_test_candidates</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Select nodes to be tested today by probabilistic coin-flip.</span>
+
+<span class="sd">        Testable nodes (``self.model.testable == True``) are candidates.</span>
+<span class="sd">        Each candidate is independently tested with probability</span>
+<span class="sd">        ``self.model.theta_Is[node]``.  Dead nodes are excluded.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Array of node indices selected for testing today.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">target_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">testable</span><span class="p">]</span>
+
+        <span class="c1"># filter out dead nodes</span>
+        <span class="n">target_nodes</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter_dead</span><span class="p">(</span><span class="n">target_nodes</span><span class="p">)</span>
+
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_nodes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span>
+
+        <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+        <span class="n">to_be_tested</span> <span class="o">=</span> <span class="n">r</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">theta_Is</span><span class="p">[</span><span class="n">target_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">nodes_to_be_tested</span> <span class="o">=</span> <span class="n">target_nodes</span><span class="p">[</span><span class="n">to_be_tested</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;TESTING: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes_to_be_tested</span><span class="p">)</span><span class="si">}</span><span class="s2"> nodes to be tested&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">nodes_to_be_tested</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;decided to go for test today.&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">nodes_to_be_tested</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.perform_test">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.perform_test">[docs]</a>
+    <span class="k">def</span> <span class="nf">perform_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Administer tests to the given nodes and classify results.</span>
+
+<span class="sd">        Nodes in states S, S_s, R, and E are considered healthy</span>
+<span class="sd">        (negative test result).  Nodes in states I_s, I_n, I_a, J_s,</span>
+<span class="sd">        and J_n are considered ill (positive result).  Nodes in states</span>
+<span class="sd">        EXT or D must not be passed to this method.</span>
+
+<span class="sd">        Updates ``stat_all_tests``, ``stat_positive_tests``,</span>
+<span class="sd">        ``stat_negative_tests``, ``node_detected``, and</span>
+<span class="sd">        ``node_active_case`` on the model.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Indices of nodes to test.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            tuple[numpy.ndarray, numpy.ndarray]: A pair</span>
+<span class="sd">            ``(healthy, ill)`` of integer node-index arrays.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If any node in ``nodes`` is in state ``EXT``.</span>
+<span class="sd">            AssertionError: If ``healthy`` and ``ill`` sizes do not sum</span>
+<span class="sd">                to ``len(nodes)``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">n</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([]),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span>
+
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">!=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">!=</span> <span class="n">STATES</span><span class="o">.</span><span class="n">D</span><span class="p">)</span>
+
+        <span class="c1"># add number of tests to model statistics</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_all_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="n">n</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">node_tested</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">testable</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># choose healthy nodes</span>
+        <span class="n">negative_nodes</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">+</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">S_s</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">+</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">R</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">+</span>
+            <span class="c1"># E is not recognized by test</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">E</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">STATES</span><span class="o">.</span><span class="n">EXT</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;External node goes for test.&quot;</span><span class="p">)</span>
+
+        <span class="n">healthy</span> <span class="o">=</span> <span class="n">nodes</span><span class="p">[</span><span class="n">negative_nodes</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">ill</span> <span class="o">=</span> <span class="n">nodes</span><span class="p">[</span><span class="n">negative_nodes</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span>
+
+        <span class="k">assert</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">healthy</span><span class="p">)</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">))</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+
+        <span class="c1"># give them flags</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_negative_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">healthy</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span><span class="p">[</span><span class="n">ill</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">ill</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">healthy</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="p">[</span><span class="n">healthy</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Tested </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span><span class="si">}</span><span class="s2">, positive </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span><span class="si">}</span><span class="s2">, negative </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">healthy</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">nodes</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">ill</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;has positive test.&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">cfgs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">in</span> <span class="n">healthy</span><span class="p">:</span>
+                <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">&quot;has negative test.&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">healthy</span><span class="p">,</span> <span class="n">ill</span></div>
+
+
+<div class="viewcode-block" id="TestingPolicy.run">
+<a class="viewcode-back" href="../src_modules.html#testing_policy.TestingPolicy.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the testing policy.</span>
+
+<span class="sd">        Selects test candidates, performs tests, isolates positively</span>
+<span class="sd">        tested nodes, and updates active-case statistics.  Delegates</span>
+<span class="sd">        first-day setup to the parent class.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_all_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_positive_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_negative_tests</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_first_symptoms</span><span class="p">()</span>
+
+        <span class="n">nodes_to_be_tested</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">select_test_candidates</span><span class="p">()</span>
+        <span class="n">healthy</span><span class="p">,</span> <span class="n">ill</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">nodes_to_be_tested</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">process_detected_nodes</span><span class="p">(</span><span class="n">ill</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_Id</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">node_active_case</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stat_cum_Id</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">node_detected</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;t = </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2"> ACTIVE CASES: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">stat_Id</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">t</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">e</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;TESTING TIME </span><span class="si">{</span><span class="n">e</span><span class="o">-</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

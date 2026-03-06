@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>simulation_engine &#8212; MAIS  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../index.html">
+          <span>MAIS  documentation</span></a></h1>
+        <h2 class="heading"><span>simulation_engine</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <h1>Source code for simulation_engine</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Plan-based discrete-time simulation engine.</span>
+
+<span class="sd">This module defines :class:`SimulationEngine`, which replaces the Gillespie</span>
+<span class="sd">propensity loop with a *planning* approach: each node holds a pre-scheduled</span>
+<span class="sd">``(time_to_go, state_to_go)`` pair.  Every day the engine decrements counters</span>
+<span class="sd">and moves nodes whose countdown has reached zero, then invokes</span>
+<span class="sd">:meth:`daily_update` for state-dependent daily checks (e.g. infection</span>
+<span class="sd">attempts).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">models.engine</span> <span class="kn">import</span> <span class="n">BaseEngine</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">global_configs</span>
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+
+
+<span class="n">EXPECTED_NUM_DAYS</span> <span class="o">=</span> <span class="mi">300</span>
+
+
+<div class="viewcode-block" id="SimulationEngine">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine">[docs]</a>
+<span class="k">class</span> <span class="nc">SimulationEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Discrete-time plan-based epidemic engine.</span>
+
+<span class="sd">    Each simulated agent (node) carries a *plan*: a countdown</span>
+<span class="sd">    (``time_to_go``) and a target state (``state_to_go``).  On every</span>
+<span class="sd">    simulated day:</span>
+
+<span class="sd">    1. :meth:`daily_update` is called for nodes that need a check</span>
+<span class="sd">       (e.g. susceptible nodes that might be infected).</span>
+<span class="sd">    2. All countdown timers are decremented.</span>
+<span class="sd">    3. Nodes whose timer hits zero are moved to their planned state via</span>
+<span class="sd">       :meth:`change_states`.</span>
+<span class="sd">    4. :meth:`update_plan` sets new plans for the nodes that just moved.</span>
+
+<span class="sd">    Subclasses implement :meth:`daily_update` and :meth:`update_plan` to</span>
+<span class="sd">    define the model&#39;s disease-progression logic.</span>
+
+<span class="sd">    Class-level attributes (override in subclasses):</span>
+<span class="sd">        states (list): Ordered list of state codes.</span>
+<span class="sd">        num_states (int): Number of states.</span>
+<span class="sd">        state_str_dict (dict): State-code → label mapping.</span>
+<span class="sd">        ext_code (int): State code used for external nodes.</span>
+<span class="sd">        transitions (list): Allowed ``(from, to)`` pairs.</span>
+<span class="sd">        num_transitions (int): Number of transitions.</span>
+<span class="sd">        final_states (list): Absorbing states.</span>
+<span class="sd">        invisible_states (list): States excluded from population count.</span>
+<span class="sd">        unstable_states (list): States that can still change.</span>
+<span class="sd">        fixed_model_parameters (dict): Scalar constructor parameters.</span>
+<span class="sd">        model_parameters (dict): Per-node constructor parameters.</span>
+<span class="sd">        common_arguments (dict): Common constructor parameters (seed, etc.).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">states</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">num_states</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">states</span><span class="p">)</span>
+    <span class="n">state_str_dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="n">ext_code</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">transitions</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">num_transitions</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">transitions</span><span class="p">)</span>
+
+    <span class="n">final_states</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">invisible_states</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">unstable_states</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">fixed_model_parameters</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">model_parameters</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="n">common_arguments</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;random_seed&quot;</span><span class="p">:</span> <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;random seed value&quot;</span><span class="p">),</span>
+        <span class="s2">&quot;start_day&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;day to start&quot;</span><span class="p">)</span>
+    <span class="p">}</span>
+
+<div class="viewcode-block" id="SimulationEngine.__init__">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.__init__">[docs]</a>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the simulation engine on a contact graph.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            G: Contact graph or multi-layer graph object.  Stored as both</span>
+<span class="sd">                ``self.G`` (backward compatibility) and ``self.graph``.</span>
+<span class="sd">            **kwargs: Keyword arguments that override any default declared in</span>
+<span class="sd">                ``fixed_model_parameters``, ``model_parameters``, or</span>
+<span class="sd">                ``common_arguments``.  State initial counts supplied as</span>
+<span class="sd">                ``init_&lt;STATE_LABEL&gt;=&lt;count&gt;``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">G</span>  <span class="c1"># backward compatibility</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="n">G</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">init_kwargs</span> <span class="o">=</span> <span class="n">kwargs</span>
+
+        <span class="c1"># 2. model initialization</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span>
+
+        <span class="c1"># 3. time and history setup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span>
+
+        <span class="c1"># 4. init states and their counts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_ext_nodes</span><span class="p">,</span>
+                                    <span class="n">ext_code</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ext_code</span><span class="p">)</span>
+
+
+        <span class="c1"># 5. set callback to None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">T</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">-</span> <span class="mi">1</span></div>
+
+
+<div class="viewcode-block" id="SimulationEngine.update_graph">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.update_graph">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_G</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update the internal graph reference and derived node metadata.</span>
+
+<span class="sd">        Safe to call with ``None`` (no-op).  Updates ``self.graph``,</span>
+<span class="sd">        ``self.num_nodes``, ``self.num_ext_nodes``, and ``self.nodes``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            new_G: New graph object, or ``None`` to leave the graph unchanged.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">new_G</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">G</span> <span class="o">=</span> <span class="n">new_G</span>  <span class="c1"># just for backward compability</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph</span> <span class="o">=</span> <span class="n">new_G</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">num_ext_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_base_nodes</span>
+            <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+                <span class="c1">#  for saved old graph</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">num_ext_nodes</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">number_of_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+
+
+
+<div class="viewcode-block" id="SimulationEngine.inicialization">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.inicialization">[docs]</a>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise model parameters and build node-index array.</span>
+
+<span class="sd">        Delegates to the parent :meth:`inicialization`, then stores a</span>
+<span class="sd">        ``(num_nodes, 1)`` array of node indices in ``self.nodes`` and</span>
+<span class="sd">        caches ``self.num_nodes``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span>
+
+        <span class="c1"># node indexes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nodes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">num_nodes</span></div>
+
+
+        
+
+<div class="viewcode-block" id="SimulationEngine.setup_series_and_time_keeping">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.setup_series_and_time_keeping">[docs]</a>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create time-series buffers and per-node tracking arrays.</span>
+
+<span class="sd">        Extends the parent setup with:</span>
+
+<span class="sd">        * Event-log buffers (``tseries``, ``history``).</span>
+<span class="sd">        * State-history array (size depends on ``global_configs.SAVE_NODES``).</span>
+<span class="sd">        * Per-state duration lists (when ``global_configs.SAVE_DURATIONS``).</span>
+<span class="sd">        * Per-node ``durations`` counter.</span>
+<span class="sd">        * Per-state :class:`~utils.history_utils.TimeSeries` for counts and</span>
+<span class="sd">          increments (pre-allocated to ``EXPECTED_NUM_DAYS`` entries).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span>
+
+        <span class="n">tseries_len</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_transitions</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">tseries</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">history</span> <span class="o">=</span> <span class="n">TransitionHistory</span><span class="p">(</span><span class="n">tseries_len</span><span class="p">)</span>
+
+        <span class="c1"># state history</span>
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_NODES</span><span class="p">:</span>
+            <span class="n">history_len</span> <span class="o">=</span> <span class="n">EXPECTED_NUM_DAYS</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">history_len</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span> <span class="o">=</span> <span class="n">TransitionHistory</span><span class="p">(</span>
+            <span class="n">history_len</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_DURATIONS</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">s</span><span class="p">:</span> <span class="p">[]</span>
+                <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+            <span class="p">}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">durations</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+
+        <span class="c1"># state_counts ... numbers of inidividuals in given states</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">state</span><span class="p">:</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="n">EXPECTED_NUM_DAYS</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">state</span><span class="p">:</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="n">EXPECTED_NUM_DAYS</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span>
+        <span class="p">}</span>
+
+        <span class="c1"># N ... actual number of individuals in population</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span> <span class="o">=</span> <span class="n">TimeSeries</span><span class="p">(</span><span class="n">EXPECTED_NUM_DAYS</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="SimulationEngine.states_and_counts_init">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.states_and_counts_init">[docs]</a>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise state counts and per-node planning arrays.</span>
+
+<span class="sd">        Extends the parent :meth:`states_and_counts_init` with:</span>
+
+<span class="sd">        * ``self.time_to_go`` – per-node countdown to next transition</span>
+<span class="sd">          (``-1`` means &quot;no scheduled transition&quot;).</span>
+<span class="sd">        * ``self.state_to_go`` – planned next state for each node.</span>
+<span class="sd">        * ``self.current_state`` – copy of the initial state assignment.</span>
+<span class="sd">        * ``self.need_update`` – boolean flag per node indicating that the</span>
+<span class="sd">          plan must be recomputed.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            ext_nodes (int, optional): Number of external nodes. Defaults to</span>
+<span class="sd">                ``None``.</span>
+<span class="sd">            ext_code (int, optional): State code for external nodes. Defaults</span>
+<span class="sd">                to ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">states_and_counts_init</span><span class="p">(</span><span class="n">ext_nodes</span><span class="p">,</span> <span class="n">ext_code</span><span class="p">)</span>
+
+        <span class="c1"># time to go until I move to the state state_to_go</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">current_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+
+        <span class="c1"># need update = need to recalculate time to go and state_to_go</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">need_update</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span></div>
+
+
+        
+<div class="viewcode-block" id="SimulationEngine.daily_update">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.daily_update">[docs]</a>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily per-node checks (e.g. infection attempts).</span>
+
+<span class="sd">        Called once per day for nodes flagged in ``self.need_check``.</span>
+<span class="sd">        No-op in the base class.  Subclasses override this to implement</span>
+<span class="sd">        infection logic and other daily events.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes that require a</span>
+<span class="sd">                daily check.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">pass</span></div>
+
+
+
+<div class="viewcode-block" id="SimulationEngine.change_states">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.change_states">[docs]</a>
+    <span class="k">def</span> <span class="nf">change_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">target_state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Move nodes to their planned (or a forced) target state.</span>
+
+<span class="sd">        Clears the old membership, assigns the new state, updates</span>
+<span class="sd">        ``state_counts``, ``state_increments``, and optionally</span>
+<span class="sd">        ``states_history``, then calls :meth:`update_plan` so each node</span>
+<span class="sd">        gets a fresh plan.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap indicating which nodes</span>
+<span class="sd">                should change state.</span>
+<span class="sd">            target_state (int, optional): If given, all *nodes* are moved</span>
+<span class="sd">                to this state, ignoring ``self.state_to_go``.  If ``None``</span>
+<span class="sd">                (default), each node is moved to its own ``self.state_to_go``</span>
+<span class="sd">                value.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># discard current state</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[:,</span> <span class="n">nodes</span> <span class="o">==</span> <span class="kc">True</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+
+        <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">nodes</span><span class="o">.</span><span class="n">nonzero</span><span class="p">()[</span><span class="mi">0</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">target_state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">new_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">node</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">new_state</span> <span class="o">=</span> <span class="n">target_state</span>
+            <span class="n">old_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">node</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">new_state</span><span class="p">,</span> <span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">old_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">new_state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_NODES</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">][</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_state</span>
+
+        <span class="k">if</span> <span class="n">target_state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes</span><span class="p">]</span> <span class="o">=</span> <span class="n">target_state</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_plan</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SimulationEngine.update_plan">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.update_plan">[docs]</a>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate new transition plans for nodes that just changed state.</span>
+
+<span class="sd">        Sets ``self.time_to_go`` and ``self.state_to_go`` for each node in</span>
+<span class="sd">        *nodes* based on the node&#39;s current state.  No-op in the base class.</span>
+<span class="sd">        Subclasses override this to implement state-specific duration sampling.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of nodes whose plans need</span>
+<span class="sd">                updating.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">pass</span></div>
+
+
+    <span class="k">def</span> <span class="nf">_get_target_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a bitmap of nodes that are both in *nodes* and in *state*.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            nodes (numpy.ndarray): Boolean bitmap of candidate nodes.</span>
+<span class="sd">            state (int): State code to intersect with.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            numpy.ndarray: Boolean bitmap of shape ``(num_nodes,)`` that is</span>
+<span class="sd">            ``True`` only where *nodes* is ``True`` and the node&#39;s current</span>
+<span class="sd">            state equals *state*.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">nodes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+        <span class="n">is_target_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">state</span><span class="p">,</span> <span class="n">ret</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">ret</span><span class="p">[</span><span class="n">nodes</span><span class="o">.</span><span class="n">flatten</span><span class="p">()]</span> <span class="o">=</span> <span class="n">is_target_state</span>
+        <span class="c1"># ret = np.logical_and(</span>
+        <span class="c1">#     self.memberships[state].flatten(),</span>
+        <span class="c1">#     nodes.flatten()</span>
+        <span class="c1"># )</span>
+        <span class="k">return</span> <span class="n">ret</span>
+    
+<div class="viewcode-block" id="SimulationEngine.print">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.print">[docs]</a>
+    <span class="k">def</span> <span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Print the current calendar day and optionally per-state counts.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            verbose (bool, optional): If ``True``, prints ``T`` (calendar day)</span>
+<span class="sd">                and the count for every state.  Defaults to ``False``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;T = </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">T</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\t</span><span class="s2"> </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">state</span><span class="p">]</span><span class="si">}</span><span class="s2"> = </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SimulationEngine.save_durations">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.save_durations">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Write per-state duration lists to an open file as CSV rows.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            f (file-like): Open writable file object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="n">line</span> <span class="o">=</span> <span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]])</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">line</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">f</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SimulationEngine.save_node_states">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.save_node_states">[docs]</a>
+    <span class="k">def</span> <span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the per-node daily state history to a CSV file.</span>
+
+<span class="sd">        If ``global_configs.SAVE_NODES`` is ``False``, logs a warning and</span>
+<span class="sd">        returns an empty DataFrame.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            filename (str): Destination file path.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: Empty DataFrame when node states were not saved.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_NODES</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="s2">&quot;Nodes states were not saved, returning empty data frame.&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">()</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="o">.</span><span class="n">values</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span></div>
+
+        <span class="c1"># df = df.replace(self.state_str_dict)</span>
+        <span class="c1"># df.to_csv(filename)</span>
+        <span class="c1"># print(df)</span>
+
+<div class="viewcode-block" id="SimulationEngine.to_df">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.to_df">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert simulation output to a :class:`pandas.DataFrame`.</span>
+
+<span class="sd">        Extends the parent :meth:`to_df` by adjusting the ``day`` column and</span>
+<span class="sd">        the index when ``start_day`` is not 1.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            pandas.DataFrame: State-count and increment time-series with</span>
+<span class="sd">            calendar-day index.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">to_df</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">+</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">+</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+<div class="viewcode-block" id="SimulationEngine.run">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the plan-based simulation for *T* days.</span>
+
+<span class="sd">        Iterates over days 1..T, calling :meth:`run_iteration` each day and</span>
+<span class="sd">        the periodic callback when set.  If the epidemic ends before *T* days,</span>
+<span class="sd">        fills remaining days with the last observed counts.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            T (int): Number of days to simulate.</span>
+<span class="sd">            print_interval (int, optional): Print status every this many days;</span>
+<span class="sd">                ``0`` or negative suppresses output. Defaults to ``10``.</span>
+<span class="sd">            verbose (bool, optional): If ``True``, include per-state detail.</span>
+<span class="sd">                Defaults to ``False``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: Always ``True``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot; being monitored, now in </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">global_configs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">,</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">running</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tidx</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">T</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">T</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_day</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">-</span> <span class="mi">1</span>
+
+            <span class="k">if</span> <span class="n">__debug__</span> <span class="ow">and</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="mi">0</span><span class="p">])):</span>
+                <span class="c1"># room has run out in the timeseries storage arrays; double the size of these arrays</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span>
+                <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+            <span class="n">running</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span>
+
+            <span class="c1"># run periodical update</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">periodic_update_callback</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">%</span> <span class="n">print_interval</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+                    <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Last day took: </span><span class="si">{</span><span class="n">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="si">}</span><span class="s2"> seconds&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">t</span> <span class="o">&lt;</span> <span class="n">T</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">t</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="mi">0</span><span class="p">])):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">increase_data_series_length</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="c1"># finalize durations</span>
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_DURATIONS</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+                <span class="n">durations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">memberships</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="n">durations</span> <span class="o">=</span> <span class="n">durations</span><span class="p">[</span><span class="n">durations</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">durations</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">print_interval</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">verbose</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finalize_data_series</span><span class="p">()</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+ 
+    
+<div class="viewcode-block" id="SimulationEngine.run_iteration">
+<a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.run_iteration">[docs]</a>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one day of plan-based simulation.</span>
+
+<span class="sd">        Steps performed each day:</span>
+
+<span class="sd">        1. Copies previous-day state counts and resets increments.</span>
+<span class="sd">        2. Increments all duration counters.</span>
+<span class="sd">        3. Calls :meth:`daily_update` for nodes that need a check.</span>
+<span class="sd">        4. Decrements ``self.time_to_go`` for all nodes.</span>
+<span class="sd">        5. Moves nodes whose countdown reached zero via :meth:`change_states`.</span>
+<span class="sd">        6. Saves duration statistics when configured.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;DBG run iteration&quot;</span><span class="p">)</span>
+
+        <span class="c1"># prepare</span>
+        <span class="c1"># add timeseries members</span>
+        <span class="k">for</span> <span class="n">state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">states</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state_counts</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">state_increments</span><span class="p">[</span><span class="n">state</span><span class="p">][</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">durations</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_NODES</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">states_history</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="c1">#print(&quot;DBG Time to go&quot;, self.time_to_go)</span>
+        <span class="c1">#print(&quot;DBG State to go&quot;, self.state_to_go)</span>
+
+        <span class="c1"># update times_to_go and states_to_go and</span>
+        <span class="c1"># do daily_checkup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">need_check</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="c1">#print(&quot;DBG Time to go&quot;, self.time_to_go)</span>
+        <span class="n">nodes_to_move</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_to_go</span> <span class="o">==</span> <span class="mi">0</span>
+
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">MONITOR_NODE</span> <span class="ow">and</span> <span class="n">nodes_to_move</span><span class="p">[</span><span class="n">global_configs</span><span class="o">.</span><span class="n">MONITOR_NODE</span><span class="p">]:</span>
+            <span class="n">node</span> <span class="o">=</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">MONITOR_NODE</span>
+            <span class="n">monitor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">t</span><span class="p">,</span>
+                    <span class="sa">f</span><span class="s2">&quot;changing state from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">node</span><span class="p">,</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">state_str_dict</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">state_to_go</span><span class="p">[</span><span class="n">node</span><span class="p">,</span><span class="mi">0</span><span class="p">]]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">orig_states</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_state</span><span class="p">[</span><span class="n">nodes_to_move</span><span class="p">]</span>
+        <span class="n">durs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">nodes_to_move</span><span class="o">.</span><span class="n">flatten</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">change_states</span><span class="p">(</span><span class="n">nodes_to_move</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">durations</span><span class="p">[</span><span class="n">nodes_to_move</span><span class="o">.</span><span class="n">flatten</span><span class="p">()]</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="k">if</span> <span class="n">global_configs</span><span class="o">.</span><span class="n">SAVE_DURATIONS</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">orig_states</span><span class="p">,</span> <span class="n">durs</span><span class="p">):</span>
+                <span class="k">assert</span><span class="p">(</span><span class="n">d</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">states_durations</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">d</span><span class="p">)</span></div>
+</div>
+
+
+
+
+    
+</pre></div>
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        <a class="uplink" href="../index.html">Contents</a>
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+    &#169; Copyright 2026, MAIS Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>

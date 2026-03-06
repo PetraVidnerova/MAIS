@@ -11,9 +11,9 @@ optional rapid antigen testing, and class-level quarantine.
 
 Classes:
     BasicSchoolPolicy: Manages school open/weekend toggle and optional
-        student testing.
+    student testing.
     ClosePartPolicy: Extends :class:`BasicSchoolPolicy` with the
-        ability to close individual classes.
+    ability to close individual classes.
     AlternatingPolicy: Alternates two groups of classes each week.
     AlternateFreeMonday: Alternating policy with Monday as a free day.
     AlternateAndMondayPCR: Alternating policy with Monday PCR testing.
