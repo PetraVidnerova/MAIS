@@ -2,7 +2,7 @@
 # <img src="./doc/fig/mais.png" style="float: left;" width="5%"/> MAIS &nbsp; &nbsp; <a href="https://doi.org/10.5281/zenodo.16421566"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.16421566.svg" style="float: right;"/></a>
 ## Multi-Agent Information/Infection Spread Model 
 
-**Martin Bakoš**<sup>1</sup>,  **Roman Neruda**<sup>1, 2</sup>, **Gabriela Suchopárová**<sup>1</sup>, **Josef Šlerka**<sup>1</sup>, **Vít Tuček**<sup>1</sup>, **Petra Vidnerová**<sup>1,2</sup>
+**Martin Bakoš**<sup>1</sup>,  **Gabriela Kadlecoová**<sup>1</sup>, **Roman Neruda**<sup>1, 2</sup>, **Josef Šlerka**<sup>1</sup>, **Vít Tuček**<sup>1</sup>, **Petra Vidnerová**<sup>1,2</sup>
 
 <sup>1</sup> Faculty of Arts, Charles University
 
