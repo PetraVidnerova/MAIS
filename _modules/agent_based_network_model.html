@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>agent_based_network_model &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>agent_based_network_model</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -44,27 +44,27 @@
 <span class="sd">  ``df_source_nodes``).</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.simulation_engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimulationEngine</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.prob_infection</span><span class="w"> </span><span class="kn">import</span> <span class="n">prob_of_contact</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">RandomDuration</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">gen_tuple</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.states</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span><span class="p">,</span> <span class="n">state_codes</span>
+<span class="kn">from</span> <span class="nn">models.simulation_engine</span> <span class="kn">import</span> <span class="n">SimulationEngine</span>
+<span class="kn">from</span> <span class="nn">models.prob_infection</span> <span class="kn">import</span> <span class="n">prob_of_contact</span>
+<span class="kn">from</span> <span class="nn">utils.random_utils</span> <span class="kn">import</span> <span class="n">RandomDuration</span>
+<span class="kn">from</span> <span class="nn">utils.random_utils</span> <span class="kn">import</span> <span class="n">gen_tuple</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
+<span class="kn">from</span> <span class="nn">models.states</span> <span class="kn">import</span> <span class="n">STATES</span><span class="p">,</span> <span class="n">state_codes</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">global_configs</span>
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">global_configs</span>
 
 
 <div class="viewcode-block" id="SimulationDrivenModel">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">SimulationDrivenModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">SimulationDrivenModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Agent-based SEIR-variant epidemic model with stochastic duration sampling.</span>
 
 <span class="sd">    Each agent (network node) progresses through disease compartments with</span>
@@ -179,7 +179,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.inicialization">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the model: set derived beta parameters, load duration and death data.</span>
 
 <span class="sd">        Before calling the parent initialiser, sets ``beta_in_family``,</span>
@@ -236,7 +236,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend time-keeping setup with infection-time and contact-history buffers.</span>
 
 <span class="sd">        Adds:</span>
@@ -267,7 +267,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend state initialisation with per-node disease-timeline arrays.</span>
 
 <span class="sd">        After calling the parent :meth:`states_and_counts_init`:</span>
@@ -316,7 +316,7 @@
         
 <div class="viewcode-block" id="SimulationDrivenModel.daily_update">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily infection checks and update plans for susceptible nodes.</span>
 
 <span class="sd">        For susceptible (S / S_s) nodes:</span>
@@ -372,7 +372,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.update_plan">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate new transition plans for nodes that just changed state.</span>
 
 <span class="sd">        For each state, samples the appropriate duration(s) from the loaded</span>
@@ -560,7 +560,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one day of simulation with infection-time tracking.</span>
 
 <span class="sd">        Before delegating to the parent :meth:`run_iteration`:</span>
@@ -600,7 +600,7 @@
                 
 <div class="viewcode-block" id="SimulationDrivenModel.move_to_R">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.move_to_R">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Move a list of nodes to the Recovered state.</span>
 
 <span class="sd">        Args:</span>
@@ -613,7 +613,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.move_target_nodes_to_R">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.move_target_nodes_to_R">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_target_nodes_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_target_nodes_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Move nodes (given as a boolean bitmap) to the Recovered state.</span>
 
 <span class="sd">        Args:</span>
@@ -625,7 +625,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.move_target_nodes_to_S">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.move_target_nodes_to_S">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_target_nodes_to_S</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_target_nodes_to_S</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Move nodes (given as a boolean bitmap) to the Susceptible state.</span>
 
 <span class="sd">        Args:</span>
@@ -637,7 +637,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.move_to_E">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.move_to_E">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_to_E</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_to_E</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly expose *num* susceptible (S or S_s) nodes by moving them to E.</span>
 
 <span class="sd">        Selects nodes uniformly at random from all currently susceptible nodes.</span>
@@ -681,7 +681,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.df_source_infection">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.df_source_infection">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">df_source_infection</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">df_source_infection</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame of successful transmissions per contact layer per day.</span>
 
 <span class="sd">        Returns:</span>
@@ -698,7 +698,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.df_source_nodes">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.df_source_nodes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">df_source_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">df_source_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a Series of successful infection counts per infectious node.</span>
 
 <span class="sd">        Filters to nodes that are not in S, S_s, or E (i.e. nodes that were</span>
@@ -722,7 +722,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.die_or_not_to_die">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.die_or_not_to_die">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">die_or_not_to_die</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">die_or_not_to_die</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Decide stochastically whether each target node will die from the disease.</span>
 
 <span class="sd">        Uses age- and sex-stratified case-fatality rates scaled by ``self.mu``.</span>
@@ -752,7 +752,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.get_time_to_die">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.get_time_to_die">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_time_to_die</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_time_to_die</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample the number of days until death for each dying node.</span>
 
 <span class="sd">        Uses a mixed piecewise distribution:</span>
@@ -788,7 +788,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.get_dead">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.get_dead">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_dead</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_dead</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return summary statistics about deceased nodes.</span>
 
 <span class="sd">        Returns:</span>
@@ -810,7 +810,7 @@
 
 <div class="viewcode-block" id="SimulationDrivenModel.flip_coin_for_external_edges">
 <a class="viewcode-back" href="../src_modules.html#agent_based_network_model.SimulationDrivenModel.flip_coin_for_external_edges">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">flip_coin_for_external_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">flip_coin_for_external_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Stochastically activate external-node edges for the current day.</span>
 
 <span class="sd">        Switches all external-node edges on (resetting from the previous day),</span>
@@ -830,7 +830,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -840,7 +840,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -6,11 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Scripts &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="_static/haiku.css?v=e491ac2d" />
     <script src="_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/doctools.js?v=888ff710"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Source Modules" href="src_modules.html" />
@@ -20,7 +20,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>Scripts</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         «&#160;&#160;<a href="index.html">MAIS Documentation</a>
@@ -38,8 +38,21 @@
 <h1>Scripts<a class="headerlink" href="#scripts" title="Link to this heading">¶</a></h1>
 <section id="scripts-top-level">
 <h2>scripts (top level)<a class="headerlink" href="#scripts-top-level" title="Link to this heading">¶</a></h2>
-<section id="animate">
-<h3><code class="docutils literal notranslate"><span class="pre">animate</span></code><a class="headerlink" href="#animate" title="Link to this heading">¶</a></h3>
+<section id="module-animate">
+<span id="animate"></span><h3><code class="docutils literal notranslate"><span class="pre">animate</span></code><a class="headerlink" href="#module-animate" title="Link to this heading">¶</a></h3>
+<p>Interactive animation of per-node epidemic states using graph-tool.</p>
+<p>This script visualises a pre-computed node-state time-series (produced by
+enabling <code class="docutils literal notranslate"><span class="pre">save_node_states</span></code> in a simulation run) as an animated graph
+rendered with <code class="docutils literal notranslate"><span class="pre">graph-tool</span></code> and <code class="docutils literal notranslate"><span class="pre">GTK</span></code>.</p>
+<p>Each node is rendered as a gender-specific icon (lady / man); nodes that
+are in an infectious state are highlighted with a red halo.  Nodes that die
+are replaced with a zombie icon.  The animation advances one day every two
+seconds.</p>
+<p>Requires <code class="docutils literal notranslate"><span class="pre">graph-tool</span></code>, <code class="docutils literal notranslate"><span class="pre">cairo</span></code>, and the GTK bindings to be installed.</p>
+<p>Typical usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">animate</span><span class="o">.</span><span class="n">py</span> <span class="n">config</span><span class="o">.</span><span class="n">ini</span> <span class="o">--</span><span class="n">nodes_file</span> <span class="o">../</span><span class="n">data</span><span class="o">/</span><span class="n">output</span><span class="o">/</span><span class="n">model</span><span class="o">/</span><span class="n">node_states</span><span class="o">.</span><span class="n">csv</span>
+</pre></div>
+</div>
 </section>
 <section id="module-plot_experiments">
 <span id="plot-experiments"></span><h3><code class="docutils literal notranslate"><span class="pre">plot_experiments</span></code><a class="headerlink" href="#module-plot_experiments" title="Link to this heading">¶</a></h3>
@@ -361,7 +374,7 @@ use the <code class="docutils literal notranslate"><span class="pre">&quot;T&quo
 
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         «&#160;&#160;<a href="index.html">MAIS Documentation</a>
@@ -375,7 +388,7 @@ use the <code class="docutils literal notranslate"><span class="pre">&quot;T&quo
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

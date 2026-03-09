@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>extended_network_model &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>extended_network_model</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -46,11 +46,11 @@
 <span class="sd">  * ``TGMNetworkModel`` – multi-layer-graph engine (EngineM).</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.model</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_custom_model</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine_daily</span><span class="w"> </span><span class="kn">import</span> <span class="n">DailyEngine</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine_sequential</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequentialEngine</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine_m</span><span class="w"> </span><span class="kn">import</span> <span class="n">EngineM</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">models.model</span> <span class="kn">import</span> <span class="n">create_custom_model</span>
+<span class="kn">from</span> <span class="nn">models.engine_daily</span> <span class="kn">import</span> <span class="n">DailyEngine</span>
+<span class="kn">from</span> <span class="nn">models.engine_sequential</span> <span class="kn">import</span> <span class="n">SequentialEngine</span>
+<span class="kn">from</span> <span class="nn">models.engine_m</span> <span class="kn">import</span> <span class="n">EngineM</span>
 <span class="c1"># models</span>
 
 <span class="c1"># model = ENGINE + MODEL DEFINITION</span>
@@ -61,7 +61,7 @@
 
 <div class="viewcode-block" id="STATES">
 <a class="viewcode-back" href="../src_modules.html#extended_network_model.STATES">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">STATES</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended state codes including detected variants of every compartment.</span>
 
 <span class="sd">    Attributes:</span>
@@ -318,7 +318,7 @@
 
 <div class="viewcode-block" id="calc_propensities">
 <a class="viewcode-back" href="../src_modules.html#extended_network_model.calc_propensities">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">calc_propensities</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">use_dict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">calc_propensities</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">use_dict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute per-node daily transition probabilities for the extended model.</span>
 
 <span class="sd">    Returns a list of propensity arrays (one per transition) ordered to match</span>
@@ -708,7 +708,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -718,7 +718,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

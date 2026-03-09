@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>engine_seirspluslike &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>engine_seirspluslike</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -36,21 +36,21 @@
 <span class="sd">helpers.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">scipy</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.integrate</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="k">as</span> <span class="nn">scipy</span>
+<span class="kn">import</span> <span class="nn">scipy.integrate</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">import</span> <span class="nn">time</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.sparse_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">prop_of_row</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseEngine</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
+<span class="kn">from</span> <span class="nn">utils.sparse_utils</span> <span class="kn">import</span> <span class="n">prop_of_row</span>
+<span class="kn">from</span> <span class="nn">models.engine</span> <span class="kn">import</span> <span class="n">BaseEngine</span>
 
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">SeirsPlusLikeEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">SeirsPlusLikeEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Gillespie (continuous-time) epidemic engine for network models.</span>
 
 <span class="sd">    Extends :class:`~models.engine.BaseEngine` with:</span>
@@ -68,7 +68,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.inicialization">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise model parameters and broadcast them to per-node arrays.</span>
 
 <span class="sd">        Reads constructor keyword arguments (falling back to per-parameter</span>
@@ -104,7 +104,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Create all time-series buffers for a SEIRS-Plus-like run.</span>
 
 <span class="sd">        Allocates :class:`~utils.history_utils.TimeSeries` objects for state</span>
@@ -165,7 +165,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise per-state node counts and the initial membership array.</span>
 
 <span class="sd">        Reads ``init_&lt;STATE_LABEL&gt;`` keyword arguments, assigns residual nodes</span>
@@ -229,7 +229,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.node_degrees">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.node_degrees">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">node_degrees</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Amat</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">node_degrees</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Amat</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the degree of each node (sum of adjacency-matrix columns).</span>
 
 <span class="sd">        Args:</span>
@@ -243,7 +243,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.update_scenario_flags">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.update_scenario_flags">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_scenario_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_scenario_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Recompute ``testing_scenario`` and ``tracing_scenario`` flags.</span>
 
 <span class="sd">        These boolean attributes are used by ``calc_propensities`` to skip</span>
@@ -271,7 +271,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.num_contacts">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.num_contacts">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">num_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">num_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return per-node contact counts from nodes in *state*.</span>
 
 <span class="sd">        Uses the membership arrays and the adjacency matrix to count how many</span>
@@ -313,7 +313,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.prob_of_contact">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.prob_of_contact">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute per-node probability of becoming newly exposed via network contacts.</span>
 
 <span class="sd">        Stochastically activates edges between *source_candidate_states* and</span>
@@ -431,7 +431,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.current_state_count">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.current_state_count">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the count of nodes in *state* at the current time index.</span>
 
 <span class="sd">        Args:</span>
@@ -445,7 +445,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.current_N">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.current_N">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the current effective population size.</span>
 
 <span class="sd">        Returns:</span>
@@ -457,7 +457,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.increase_data_series_length">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.increase_data_series_length">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend time-series and transition-history buffers.</span>
 
 <span class="sd">        Called automatically by :meth:`run_iteration` when storage is nearly</span>
@@ -479,7 +479,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.finalize_data_series">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.finalize_data_series">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually consumed length.</span>
 
 <span class="sd">        Called at the end of a run.  Invokes ``finalize(self.tidx)`` on</span>
@@ -496,7 +496,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.save">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.save">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the simulation time-series to a CSV file.</span>
 
 <span class="sd">        Assembles per-state counts and increments, saves them using the</span>
@@ -525,7 +525,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one Gillespie step: select and apply one state transition.</span>
 
 <span class="sd">        Uses the propensities returned by ``calc_propensities`` to sample the</span>
@@ -603,7 +603,7 @@
 
 <div class="viewcode-block" id="SeirsPlusLikeEngine.run">
 <a class="viewcode-back" href="../src_modules.html#engine_seirspluslike.SeirsPlusLikeEngine.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the Gillespie simulation for up to *T* time units.</span>
 
 <span class="sd">        Loops over :meth:`run_iteration` until the simulation terminates or</span>
@@ -675,7 +675,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -685,7 +685,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

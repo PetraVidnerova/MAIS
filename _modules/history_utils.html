@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>history_utils &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>history_utils</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -36,12 +36,12 @@
 <span class="sd">actual simulation length at the end of a run.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
 
 <div class="viewcode-block" id="BaseSeries">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">BaseSeries</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">BaseSeries</span><span class="p">():</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for all time-series containers in the MAIS simulation.</span>
 
@@ -54,12 +54,12 @@
 <span class="sd">    automatically extended by 100 elements before the write proceeds.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="kc">None</span>
 
 <div class="viewcode-block" id="BaseSeries.__getitem__">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.__getitem__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the value at ``idx``.</span>
 
 <span class="sd">        Args:</span>
@@ -73,7 +73,7 @@
 
 <div class="viewcode-block" id="BaseSeries.__setitem__">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.__setitem__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the value at ``idx``, auto-extending the array if necessary.</span>
 
 <span class="sd">        If ``idx`` equals the current length of the underlying array, the</span>
@@ -102,7 +102,7 @@
 
 <div class="viewcode-block" id="BaseSeries.save">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.save">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the underlying array to a NumPy ``.npy`` file.</span>
 
 <span class="sd">        Args:</span>
@@ -114,7 +114,7 @@
 
 <div class="viewcode-block" id="BaseSeries.__len__">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.__len__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the number of elements in the series.</span>
 
 <span class="sd">        Returns:</span>
@@ -125,7 +125,7 @@
 
 <div class="viewcode-block" id="BaseSeries.len">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.len">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the number of elements in the series.</span>
 
 <span class="sd">        Returns:</span>
@@ -136,7 +136,7 @@
 
 <div class="viewcode-block" id="BaseSeries.asarray">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.asarray">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">asarray</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">asarray</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the underlying NumPy array directly.</span>
 
 <span class="sd">        Returns:</span>
@@ -147,7 +147,7 @@
 
 <div class="viewcode-block" id="BaseSeries.bloat">
 <a class="viewcode-back" href="../src_modules.html#history_utils.BaseSeries.bloat">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the internal storage by ``len`` elements.</span>
 
 <span class="sd">        Subclasses must override this method with an implementation that</span>
@@ -163,7 +163,7 @@
 
 <div class="viewcode-block" id="TimeSeries">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TimeSeries">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">TimeSeries</span><span class="p">(</span><span class="n">BaseSeries</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">TimeSeries</span><span class="p">(</span><span class="n">BaseSeries</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;One-dimensional time series backed by a NumPy array of a given dtype.</span>
 
@@ -176,14 +176,14 @@
 <span class="sd">            Defaults to ``float``.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">=</span> <span class="n">dtype</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
 
 <div class="viewcode-block" id="TimeSeries.bloat">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TimeSeries.bloat">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the series by ``len`` zero-initialised elements.</span>
 
 <span class="sd">        Args:</span>
@@ -197,7 +197,7 @@
 
 <div class="viewcode-block" id="TimeSeries.finalize">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TimeSeries.finalize">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tidx</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tidx</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim the series to the actual simulation length.</span>
 
 <span class="sd">        Removes trailing zero-padding so that the array ends at the last</span>
@@ -212,7 +212,7 @@
 
 <div class="viewcode-block" id="TimeSeries.get_values">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TimeSeries.get_values">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_values</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_values</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the underlying NumPy array.</span>
 
 <span class="sd">        Returns:</span>
@@ -225,7 +225,7 @@
 
 <div class="viewcode-block" id="TransitionHistory">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TransitionHistory">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">TransitionHistory</span><span class="p">(</span><span class="n">BaseSeries</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">TransitionHistory</span><span class="p">(</span><span class="n">BaseSeries</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Two-dimensional history table recording state-transition events over time.</span>
 
@@ -241,7 +241,7 @@
 <span class="sd">        width (int, optional): Number of columns per row. Defaults to ``3``.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="nb">len</span><span class="p">,</span> <span class="n">width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
@@ -249,7 +249,7 @@
 
 <div class="viewcode-block" id="TransitionHistory.bloat">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TransitionHistory.bloat">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">bloat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">len</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the table by ``len`` zero-initialised rows.</span>
 
 <span class="sd">        Args:</span>
@@ -261,7 +261,7 @@
 
 <div class="viewcode-block" id="TransitionHistory.finalize">
 <a class="viewcode-back" href="../src_modules.html#history_utils.TransitionHistory.finalize">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tidx</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tidx</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim the table to the actual number of recorded events.</span>
 
 <span class="sd">        Removes trailing zero-padded rows so that the table contains only</span>
@@ -278,7 +278,7 @@
 
 <div class="viewcode-block" id="ShortListSeries">
 <a class="viewcode-back" href="../src_modules.html#history_utils.ShortListSeries">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">ShortListSeries</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">ShortListSeries</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Fixed-capacity FIFO list that discards the oldest element when full.</span>
 
 <span class="sd">    Behaves like a sliding window: once the list reaches ``length`` items,</span>
@@ -289,13 +289,13 @@
 <span class="sd">        length (int): Maximum number of elements to retain.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">length</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">length</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">length</span> <span class="o">=</span> <span class="n">length</span>
 
 <div class="viewcode-block" id="ShortListSeries.append">
 <a class="viewcode-back" href="../src_modules.html#history_utils.ShortListSeries.append">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">append</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">member</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">append</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">member</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Append ``member`` and evict the oldest element if at capacity.</span>
 
 <span class="sd">        Args:</span>
@@ -308,7 +308,7 @@
 
 <div class="viewcode-block" id="ShortListSeries.__getitem__">
 <a class="viewcode-back" href="../src_modules.html#history_utils.ShortListSeries.__getitem__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the element at ``idx``.</span>
 
 <span class="sd">        Args:</span>
@@ -322,7 +322,7 @@
 
 <div class="viewcode-block" id="ShortListSeries.__len__">
 <a class="viewcode-back" href="../src_modules.html#history_utils.ShortListSeries.__len__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the current number of stored elements.</span>
 
 <span class="sd">        Returns:</span>
@@ -334,7 +334,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -344,7 +344,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

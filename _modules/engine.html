@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>engine &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>engine</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -35,18 +35,18 @@
 <span class="sd">broadcasting, time-series bookkeeping, and skeleton run/iteration hooks.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">scipy</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.integrate</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pprint</span><span class="w"> </span><span class="kn">import</span> <span class="n">pprint</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="k">as</span> <span class="nn">scipy</span>
+<span class="kn">import</span> <span class="nn">scipy.integrate</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">from</span> <span class="nn">pprint</span> <span class="kn">import</span> <span class="n">pprint</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
 
 
 <div class="viewcode-block" id="BaseEngine">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">BaseEngine</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">BaseEngine</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Abstract base class for all MAIS simulation engines.</span>
 
 <span class="sd">    Subclasses must implement :meth:`run_iteration` (and usually</span>
@@ -67,7 +67,7 @@
 
 <div class="viewcode-block" id="BaseEngine.setup_model_params">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.setup_model_params">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_model_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model_params_dict</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_model_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model_params_dict</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Broadcast scalar or list model parameters to per-node arrays.</span>
 
 <span class="sd">        Each value in *model_params_dict* is stored as an attribute of shape</span>
@@ -90,7 +90,7 @@
 
 <div class="viewcode-block" id="BaseEngine.set_seed">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.set_seed">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">set_seed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">set_seed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the NumPy random seed for reproducible simulations.</span>
 
 <span class="sd">        Args:</span>
@@ -102,7 +102,7 @@
 
 <div class="viewcode-block" id="BaseEngine.inicialization">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise model parameters and build the adjacency matrix.</span>
 
 <span class="sd">        Reads values from ``self.init_kwargs`` (falling back to defaults</span>
@@ -134,7 +134,7 @@
 
 <div class="viewcode-block" id="BaseEngine.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise all time-tracking variables and empty time-series containers.</span>
 
 <span class="sd">        Sets ``self.t``, ``self.tmax``, ``self.tidx`` to zero and creates</span>
@@ -180,7 +180,7 @@
 
 <div class="viewcode-block" id="BaseEngine.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise per-state node counts and the initial membership arrays.</span>
 
 <span class="sd">        Reads ``init_&lt;STATE_LABEL&gt;`` entries from ``self.init_kwargs`` to set</span>
@@ -257,7 +257,7 @@
 
 <div class="viewcode-block" id="BaseEngine.update_graph">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.update_graph">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_G</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_G</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Build the sparse adjacency matrix from the supplied graph object.</span>
 
 <span class="sd">        Accepts a ``scipy.sparse.csr_matrix``, a ``numpy.ndarray``, or a</span>
@@ -294,7 +294,7 @@
 
 <div class="viewcode-block" id="BaseEngine.node_degrees">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.node_degrees">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">node_degrees</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Amat</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">node_degrees</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Amat</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the degree (column sum) of each node in the adjacency matrix.</span>
 
 <span class="sd">        Args:</span>
@@ -311,7 +311,7 @@
 
 <div class="viewcode-block" id="BaseEngine.set_periodic_update">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.set_periodic_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">set_periodic_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">callback</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">set_periodic_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">callback</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Register a callback to be invoked at the end of each simulated day.</span>
 
 <span class="sd">        The callback is stored as ``self.periodic_update_callback`` and is</span>
@@ -326,7 +326,7 @@
 
 <div class="viewcode-block" id="BaseEngine.update_scenario_flags">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.update_scenario_flags">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_scenario_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_scenario_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Recompute boolean scenario flags (testing, tracing, etc.).</span>
 
 <span class="sd">        No-op in the base class.  Subclasses override this to update flags</span>
@@ -338,7 +338,7 @@
 
 <div class="viewcode-block" id="BaseEngine.num_contacts">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.num_contacts">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">num_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">num_contacts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the number of contacts each node has in the given state(s).</span>
 
 <span class="sd">        .. deprecated::</span>
@@ -387,7 +387,7 @@
 
 <div class="viewcode-block" id="BaseEngine.current_state_count">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.current_state_count">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the current count of nodes in *state*.</span>
 
 <span class="sd">        Args:</span>
@@ -404,7 +404,7 @@
 
 <div class="viewcode-block" id="BaseEngine.current_N">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.current_N">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the current effective population size.</span>
 
 <span class="sd">        Returns:</span>
@@ -414,7 +414,7 @@
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">N</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tidx</span><span class="p">]</span></div>
 
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend internal time-series storage when it is about to overflow.</span>
 
 <span class="sd">        No-op in the base class.  Subclasses override this to call</span>
@@ -423,7 +423,7 @@
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">pass</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually used length after a run.</span>
 
 <span class="sd">        No-op in the base class.  Subclasses override this to call</span>
@@ -433,7 +433,7 @@
 
 <div class="viewcode-block" id="BaseEngine.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the simulation by one step.</span>
 
 <span class="sd">        No-op in the base class.  Subclasses implement the concrete stepping</span>
@@ -448,7 +448,7 @@
 
 <div class="viewcode-block" id="BaseEngine.run">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the simulation for *T* time units.</span>
 
 <span class="sd">        No-op in the base class.  Subclasses implement the main simulation</span>
@@ -469,7 +469,7 @@
 
 <div class="viewcode-block" id="BaseEngine.to_df">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.to_df">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert simulation output to a :class:`pandas.DataFrame`.</span>
 
 <span class="sd">        Returns:</span>
@@ -499,7 +499,7 @@
 
 <div class="viewcode-block" id="BaseEngine.save">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.save">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the simulation time-series to a CSV file.</span>
 
 <span class="sd">        Calls :meth:`to_df` and writes the resulting DataFrame to disk.</span>
@@ -516,7 +516,7 @@
 
 <div class="viewcode-block" id="BaseEngine.save_durations">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.save_durations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_or_filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save per-state duration statistics to a file.</span>
 
 <span class="sd">        Not yet implemented in :class:`BaseEngine`.  Subclasses may override</span>
@@ -531,7 +531,7 @@
 
 <div class="viewcode-block" id="BaseEngine.increase_data_series_length">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.increase_data_series_length">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>  <span class="c1"># noqa: F811 – second definition in original</span>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>  <span class="c1"># noqa: F811 – second definition in original</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend time-series storage (no-op; handled automatically by series objects).</span>
 
 <span class="sd">        The underlying :class:`~utils.history_utils.TimeSeries` objects</span>
@@ -549,7 +549,7 @@
 
 <div class="viewcode-block" id="BaseEngine.increase_history_len">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.increase_history_len">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_history_len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">increase_history_len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the transition-history buffers when storage is exhausted.</span>
 
 <span class="sd">        No-op in the base class (handled automatically by the series objects</span>
@@ -564,7 +564,7 @@
 
 <div class="viewcode-block" id="BaseEngine.finalize_data_series">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.finalize_data_series">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>  <span class="c1"># noqa: F811 – second definition in original</span>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>  <span class="c1"># noqa: F811 – second definition in original</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually consumed length (concrete implementation).</span>
 
 <span class="sd">        Calls ``finalize`` on ``self.tseries``, ``self.history``, each</span>
@@ -583,7 +583,7 @@
 
 <div class="viewcode-block" id="BaseEngine.print">
 <a class="viewcode-back" href="../src_modules.html#engine.BaseEngine.print">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Print the current simulation time and optionally per-state counts.</span>
 
 <span class="sd">        Args:</span>
@@ -599,7 +599,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -609,7 +609,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

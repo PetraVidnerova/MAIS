@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>run_search &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>run_search</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -44,24 +44,24 @@
 <span class="sd">An optional evolution log can be written with ``-l``.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">timeit</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">click</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">datetime</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">timeit</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">click</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
 
 <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s1">&#39;../src&#39;</span><span class="p">))</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">hyperparam_search.hyperparam_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">run_hyperparam_search</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span>
+<span class="kn">from</span> <span class="nn">hyperparam_search.hyperparam_utils</span> <span class="kn">import</span> <span class="n">run_hyperparam_search</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
 
 
 <div class="viewcode-block" id="load_gold_data">
 <a class="viewcode-back" href="../scripts.html#run_search.load_gold_data">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">load_gold_data</span><span class="p">(</span><span class="n">csv_path</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">data_column</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">from_day</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">until_day</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_dates</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">load_gold_data</span><span class="p">(</span><span class="n">csv_path</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">data_column</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">from_day</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">until_day</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_dates</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load and pre-process observed (gold) data for model fitting.</span>
 
 <span class="sd">    Reads a CSV file, aligns its time index, optionally pads the beginning</span>
@@ -150,7 +150,7 @@
 <span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--return_func&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;rmse&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Loss function.&quot;</span><span class="p">)</span>
 <span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--log_csv_file/--no_log_csv&#39;</span><span class="p">,</span> <span class="s1">&#39;-l/ &#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 <span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--out_dir&#39;</span><span class="p">,</span>  <span class="n">default</span><span class="o">=</span><span class="sa">f</span><span class="s1">&#39;./search_</span><span class="si">{</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2">_%H%M%S&quot;</span><span class="p">)</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">hyperparam_filename</span><span class="p">,</span> <span class="n">set_random_seed</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">from_day</span><span class="p">,</span> <span class="n">until_day</span><span class="p">,</span> <span class="n">use_dates</span><span class="p">,</span> <span class="n">use_config_days</span><span class="p">,</span>
+<span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">hyperparam_filename</span><span class="p">,</span> <span class="n">set_random_seed</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">from_day</span><span class="p">,</span> <span class="n">until_day</span><span class="p">,</span> <span class="n">use_dates</span><span class="p">,</span> <span class="n">use_config_days</span><span class="p">,</span>
         <span class="n">run_n_times</span><span class="p">,</span> <span class="n">first_n_zeros</span><span class="p">,</span> <span class="n">fit_column</span><span class="p">,</span> <span class="n">fit_data</span><span class="p">,</span> <span class="n">return_func</span><span class="p">,</span> <span class="n">log_csv_file</span><span class="p">,</span> <span class="n">out_dir</span><span class="p">):</span>
 
     <span class="n">random_seed</span> <span class="o">=</span> <span class="mi">42</span> <span class="k">if</span> <span class="n">set_random_seed</span> <span class="k">else</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10000</span><span class="p">)</span>
@@ -161,7 +161,7 @@
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Output directory for results: </span><span class="si">{</span><span class="n">out_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running with n_jobs == </span><span class="si">{</span><span class="n">n_jobs</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">search_func</span><span class="p">():</span>
+    <span class="k">def</span> <span class="nf">search_func</span><span class="p">():</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="n">data_col</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">fit_column</span><span class="p">)</span>
         <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
@@ -216,7 +216,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -226,7 +226,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

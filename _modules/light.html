@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>light &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>light</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -43,16 +43,16 @@
 <span class="sd">3. Clone per-run state cheaply with :meth:`LightGraph.copy`.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">operator</span><span class="w"> </span><span class="kn">import</span> <span class="n">iconcat</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">reduce</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">itertools</span><span class="w"> </span><span class="kn">import</span> <span class="n">chain</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numexpr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ne</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">copy</span><span class="w"> </span><span class="kn">import</span> <span class="n">copy</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.sparse</span><span class="w"> </span><span class="kn">import</span> <span class="n">csr_matrix</span><span class="p">,</span> <span class="n">lil_matrix</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">operator</span> <span class="kn">import</span> <span class="n">iconcat</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">reduce</span>
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">chain</span>
+<span class="kn">import</span> <span class="nn">numexpr</span> <span class="k">as</span> <span class="nn">ne</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">from</span> <span class="nn">copy</span> <span class="kn">import</span> <span class="n">copy</span>
+<span class="kn">from</span> <span class="nn">scipy.sparse</span> <span class="kn">import</span> <span class="n">csr_matrix</span><span class="p">,</span> <span class="n">lil_matrix</span>
+<span class="kn">import</span> <span class="nn">json</span>
 
 <span class="c1"># import os</span>
 <span class="c1"># os.environ[&quot;NUMEXPR_MAX_THREADS&quot;] = &quot;272&quot;  # to fix numexpr complains</span>
@@ -60,7 +60,7 @@
 
 <div class="viewcode-block" id="concat_lists">
 <a class="viewcode-back" href="../src_modules.html#light.concat_lists">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">concat_lists</span><span class="p">(</span><span class="n">l</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">concat_lists</span><span class="p">(</span><span class="n">l</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the concatenation of all lists contained in an iterable.</span>
 
 <span class="sd">    Args:</span>
@@ -76,7 +76,7 @@
 
 <div class="viewcode-block" id="LightGraph">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">LightGraph</span><span class="p">:</span>
+<span class="k">class</span> <span class="nc">LightGraph</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Graph for agent-based network models stored as NumPy arrays.</span>
 
 <span class="sd">    NetworkX proved too slow for the high-throughput edge queries needed by</span>
@@ -109,7 +109,7 @@
 
     <span class="c1"># __slots__ = [&#39;e_types&#39;, &#39;e_subtypes&#39;, &#39;e_probs&#39;, &#39;e_intensities&#39;, &#39;e_source&#39;, &#39;e_dest&#39;, &#39;e_valid&#39;, &#39;edges_repo&#39;,</span>
     <span class="c1"># &#39;edges_directions&#39;, &#39;__dict__&#39;] # not really helpful here, beneficial only for lots of small objects</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">random_seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">random_seed</span><span class="p">:</span>
             <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">random_seed</span> <span class="o">=</span> <span class="n">random_seed</span>
@@ -119,7 +119,7 @@
 
 <div class="viewcode-block" id="LightGraph.read_csv">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.read_csv">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">read_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+    <span class="k">def</span> <span class="nf">read_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
                  <span class="n">path_to_nodes</span><span class="o">=</span><span class="s1">&#39;p.csv&#39;</span><span class="p">,</span>
                  <span class="n">path_to_external</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                  <span class="n">path_to_layers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
@@ -375,7 +375,7 @@
 
 
     <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">number_of_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">number_of_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Total number of nodes in the graph (base + external).</span>
 
 <span class="sd">        Returns:</span>
@@ -385,7 +385,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_nodes">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layer</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layer</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all node indices that have at least one edge on the given layer.</span>
 
 <span class="sd">        Args:</span>
@@ -402,7 +402,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_edges_nodes">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_nodes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="n">edges_dirs</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_edges_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="n">edges_dirs</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the source and destination node indices for a set of edges.</span>
 
 <span class="sd">        Edges are stored with an arbitrary orientation (smaller index as</span>
@@ -440,7 +440,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_edges">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_flags</span><span class="p">,</span> <span class="n">dest_flags</span><span class="p">,</span> <span class="n">dirs</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_flags</span><span class="p">,</span> <span class="n">dest_flags</span><span class="p">,</span> <span class="n">dirs</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all edges between two sets of nodes.</span>
 
 <span class="sd">        Args:</span>
@@ -476,7 +476,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_nodes_edges">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes_edges">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_nodes_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return all edge indices adjacent to a set of nodes.</span>
 
 <span class="sd">        Args:</span>
@@ -502,7 +502,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_nodes_edges_on_layers">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_nodes_edges_on_layers">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_nodes_edges_on_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">layers</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_nodes_edges_on_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">layers</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return incident edge indices for a set of nodes filtered by layer.</span>
 
 <span class="sd">        Identical to :meth:`get_nodes_edges` but restricts the result to</span>
@@ -534,7 +534,7 @@
 
 <div class="viewcode-block" id="LightGraph.switch_off_edges">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.switch_off_edges">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">switch_off_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">switch_off_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Permanently deactivate a list of edges.</span>
 
 <span class="sd">        Sets ``e_active`` to ``False`` for each edge in ``edges``.  This</span>
@@ -550,7 +550,7 @@
 
 <div class="viewcode-block" id="LightGraph.switch_on_edges">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.switch_on_edges">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">switch_on_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">switch_on_edges</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Reactivate a list of previously deactivated edges.</span>
 
 <span class="sd">        Reverses :meth:`switch_off_edges` by setting ``e_active`` back to</span>
@@ -565,7 +565,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_all_edges_probs">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_all_edges_probs">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_all_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_all_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute effective transmission probabilities for every edge.</span>
 
 <span class="sd">        Combines the raw per-edge probability (``e_probs``), the quarantine</span>
@@ -601,7 +601,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_edges_probs">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_probs">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_edges_probs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute effective transmission probabilities for a subset of edges.</span>
 
 <span class="sd">        Applies the same logic as :meth:`get_all_edges_probs` but only for</span>
@@ -624,7 +624,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_edges_intensities">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_edges_intensities">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_edges_intensities</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_edges_intensities</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the intensity values for a subset of edges.</span>
 
 <span class="sd">        Args:</span>
@@ -642,7 +642,7 @@
     <span class="c1"># these methods work only with hodonin&#39;s layers</span>
 <div class="viewcode-block" id="LightGraph.is_super_edge">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_super_edge">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_super_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">is_super_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify super-spreader edges (Hodonin layer convention).</span>
 
 <span class="sd">        Super-spreader edges are defined as those with layer ID &gt;= 33.</span>
@@ -661,7 +661,7 @@
 
 <div class="viewcode-block" id="LightGraph.is_family_edge">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_family_edge">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_family_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">is_family_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify household/family edges (Hodonin layer convention).</span>
 
 <span class="sd">        Family edges are those with layer ID 1 or 2.</span>
@@ -680,7 +680,7 @@
 
 <div class="viewcode-block" id="LightGraph.is_class_edge">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_class_edge">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_class_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="nb">all</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">is_class_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">,</span> <span class="nb">all</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify school/class edges (Hodonin layer convention).</span>
 
 <span class="sd">        School edges have layer IDs 4–11.  The ``all`` flag controls whether</span>
@@ -708,7 +708,7 @@
 
 <div class="viewcode-block" id="LightGraph.is_pub_edge">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.is_pub_edge">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_pub_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">is_pub_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">edges</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Identify pub/bar edges (Hodonin layer convention).</span>
 
 <span class="sd">        Pub edges have layer IDs 20, 28 or 29.</span>
@@ -729,7 +729,7 @@
 
 <div class="viewcode-block" id="LightGraph.modify_layers_for_nodes">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.modify_layers_for_nodes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">modify_layers_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id_list</span><span class="p">,</span> <span class="n">what_by_what</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">modify_layers_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id_list</span><span class="p">,</span> <span class="n">what_by_what</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply quarantine by reducing edge probabilities for given nodes.</span>
 
 <span class="sd">        For every edge incident to a node in ``node_id_list`` that is not</span>
@@ -785,7 +785,7 @@
 
 <div class="viewcode-block" id="LightGraph.recover_edges_for_nodes">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.recover_edges_for_nodes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">recover_edges_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">release</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">recover_edges_for_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">release</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Restore original edge probabilities when nodes leave quarantine.</span>
 
 <span class="sd">        Decrements the quarantine counter for each node in ``release``.</span>
@@ -827,7 +827,7 @@
 
 <div class="viewcode-block" id="LightGraph.final_adjacency_matrix">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.final_adjacency_matrix">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">final_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">final_adjacency_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return self for backward compatibility with older graph interfaces.</span>
 
 <span class="sd">        Earlier versions of the model expected a separate adjacency-matrix</span>
@@ -842,7 +842,7 @@
 
 <div class="viewcode-block" id="LightGraph.get_layer_for_edge">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.get_layer_for_edge">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_layer_for_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">e</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_layer_for_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">e</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the layer ID for a single edge.</span>
 
 <span class="sd">        Args:</span>
@@ -856,7 +856,7 @@
 
 <div class="viewcode-block" id="LightGraph.set_layer_weights">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.set_layer_weights">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">weights</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">set_layer_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">weights</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Replace the layer-weight vector and rebuild per-edge weight cache.</span>
 
 <span class="sd">        The per-edge weight array ``e_layer_weight`` is recomputed in-place</span>
@@ -878,7 +878,7 @@
 
 <div class="viewcode-block" id="LightGraph.close_layers">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.close_layers">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">close_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_layers</span><span class="p">,</span> <span class="n">coefs</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">close_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_layers</span><span class="p">,</span> <span class="n">coefs</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the weight of named layers to zero (or a custom coefficient).</span>
 
 <span class="sd">        Useful for simulating non-pharmaceutical interventions such as school</span>
@@ -901,7 +901,7 @@
 
 <div class="viewcode-block" id="LightGraph.copy">
 <a class="viewcode-back" href="../src_modules.html#light.LightGraph.copy">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return an optimised partial copy of the graph for a new simulation run.</span>
 
 <span class="sd">        The vast majority of graph fields (topology, node attributes, edge</span>
@@ -930,7 +930,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -940,7 +940,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

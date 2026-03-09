@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>hyperparam_utils &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>hyperparam_utils</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -40,20 +40,20 @@
 <span class="sd">selection of a return/loss function from ``eval_model.return_func_zoo``.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">hyperparam_search.eval_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">return_func_zoo</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">hyperparam_search.search_methods</span><span class="w"> </span><span class="kn">import</span> <span class="n">hyperparam_search_zoo</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">model_m.model_m</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+<span class="kn">from</span> <span class="nn">hyperparam_search.eval_model</span> <span class="kn">import</span> <span class="n">return_func_zoo</span>
+<span class="kn">from</span> <span class="nn">hyperparam_search.search_methods</span> <span class="kn">import</span> <span class="n">hyperparam_search_zoo</span>
+<span class="kn">from</span> <span class="nn">model_m.model_m</span> <span class="kn">import</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
 
 
 <div class="viewcode-block" id="run_hyperparam_search">
 <a class="viewcode-back" href="../src_modules.html#hyperparam_utils.run_hyperparam_search">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">run_hyperparam_search</span><span class="p">(</span><span class="n">model_config</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="k">def</span> <span class="nf">run_hyperparam_search</span><span class="p">(</span><span class="n">model_config</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
                           <span class="n">hyperparam_config</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
                           <span class="n">model_random_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
                           <span class="n">run_n_times</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
@@ -127,7 +127,7 @@
 
 <div class="viewcode-block" id="run_single_model">
 <a class="viewcode-back" href="../src_modules.html#hyperparam_utils.run_single_model">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">run_single_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">run_single_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run a single model for ``T`` days and return it.</span>
 
 <span class="sd">    Args:</span>
@@ -147,7 +147,7 @@
 
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_run_models_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">:</span> <span class="n">ConfigFile</span><span class="p">,</span>
+<span class="k">def</span> <span class="nf">_run_models_from_config</span><span class="p">(</span><span class="n">cf</span><span class="p">:</span> <span class="n">ConfigFile</span><span class="p">,</span>
                             <span class="n">preloaded_graph</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
                             <span class="n">preloaded_model</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
                             <span class="n">hyperparams</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -230,7 +230,7 @@
         <span class="n">model</span> <span class="o">=</span> <span class="n">preloaded_model</span><span class="o">.</span><span class="n">duplicate</span><span class="p">(</span><span class="n">model_random_seed</span><span class="p">,</span> <span class="n">hyperparams</span><span class="p">,</span> <span class="n">policy_params</span><span class="o">=</span><span class="n">policy_hyperparams</span><span class="p">)</span>
 
     <span class="c1"># for different seeds</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_run_one_model</span><span class="p">(</span><span class="n">seed</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_run_one_model</span><span class="p">(</span><span class="n">seed</span><span class="p">):</span>
         <span class="n">model</span><span class="o">.</span><span class="n">reset</span><span class="p">(</span><span class="n">random_seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
         <span class="n">ret</span> <span class="o">=</span> <span class="n">run_single_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">T</span><span class="o">=</span><span class="n">ndays</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">ret</span>
@@ -253,7 +253,7 @@
     <span class="p">}</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_init_hyperparam_search</span><span class="p">(</span><span class="n">hyperparam_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_init_hyperparam_search</span><span class="p">(</span><span class="n">hyperparam_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a hyperparameter search configuration and return the search callable.</span>
 
 <span class="sd">    Reads a JSON file whose ``&quot;method&quot;`` key selects the search strategy from</span>
@@ -277,7 +277,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -287,7 +287,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

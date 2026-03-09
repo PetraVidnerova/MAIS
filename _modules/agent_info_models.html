@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>agent_info_models &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>agent_info_models</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -42,25 +42,25 @@
 <span class="sd">* :class:`InfoTippingModel` – threshold-based (tipping-point) adoption model.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.simulation_engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimulationEngine</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">RandomDuration</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.random_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">gen_tuple</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
+<span class="kn">from</span> <span class="nn">models.simulation_engine</span> <span class="kn">import</span> <span class="n">SimulationEngine</span>
+<span class="kn">from</span> <span class="nn">utils.random_utils</span> <span class="kn">import</span> <span class="n">RandomDuration</span>
+<span class="kn">from</span> <span class="nn">utils.random_utils</span> <span class="kn">import</span> <span class="n">gen_tuple</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span><span class="p">,</span> <span class="n">ShortListSeries</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">global_configs</span>
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">global_configs</span>
 
 
 <div class="viewcode-block" id="STATES">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.STATES">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">STATES</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Simple SIR state codes for information-diffusion models.</span>
 
 <span class="sd">    Attributes:</span>
@@ -77,7 +77,7 @@
 
 <div class="viewcode-block" id="Tipping">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.Tipping">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">Tipping</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">Tipping</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;State codes for the threshold-based tipping-point model.</span>
 
 <span class="sd">    Attributes:</span>
@@ -94,7 +94,7 @@
 
 <div class="viewcode-block" id="RumourModel">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">RumourModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">RumourModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Basic SIR rumour-spreading model on a contact network.</span>
 
 <span class="sd">    Agents transition S → I when a neighbour is I (with rate ``lambda0``),</span>
@@ -146,21 +146,21 @@
 
 <div class="viewcode-block" id="RumourModel.inicialization">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent initialiser (no extra setup needed).&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="RumourModel.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent time-series setup.&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="RumourModel.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily checks.</span>
 
 <span class="sd">        Args:</span>
@@ -177,7 +177,7 @@
 
 <div class="viewcode-block" id="RumourModel.prob_of_contact">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.prob_of_contact">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return nodes exposed by direct contact with I-state neighbours.</span>
 
 <span class="sd">        Iterates over all undirected edges.  For each edge between a node in</span>
@@ -235,7 +235,7 @@
 
 <div class="viewcode-block" id="RumourModel.daily_update">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily rumour-spreading check for susceptible nodes.</span>
 
 <span class="sd">        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move</span>
@@ -260,7 +260,7 @@
 
 <div class="viewcode-block" id="RumourModel.update_plan">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for nodes that just changed state.</span>
 
 <span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
@@ -292,7 +292,7 @@
 
 <div class="viewcode-block" id="RumourModel.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModel.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent run_iteration (no extra logic needed).&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span></div>
 </div>
@@ -301,7 +301,7 @@
 
 <div class="viewcode-block" id="RumourModelInfo">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">RumourModelInfo</span><span class="p">(</span><span class="n">RumourModel</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">RumourModelInfo</span><span class="p">(</span><span class="n">RumourModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended rumour model with time-decaying transmission and event boost.</span>
 
 <span class="sd">    Extends :class:`RumourModel` with:</span>
@@ -329,7 +329,7 @@
     
 <div class="viewcode-block" id="RumourModelInfo.prob_of_contact">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.prob_of_contact">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return newly exposed nodes using time-decaying lambda and event boost.</span>
 
 <span class="sd">        Computes a per-node effective transmission rate ``lambda_`` based on:</span>
@@ -397,7 +397,7 @@
 
 <div class="viewcode-block" id="RumourModelInfo.daily_update">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily spreading check and stochastic I → R transition.</span>
 
 <span class="sd">        Calls the parent :meth:`RumourModel.daily_update`, then for each I</span>
@@ -420,7 +420,7 @@
 
 <div class="viewcode-block" id="RumourModelInfo.update_plan">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.RumourModelInfo.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for RumourModelInfo nodes.</span>
 
 <span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
@@ -455,7 +455,7 @@
 
 <div class="viewcode-block" id="InfoSIRModel">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">InfoSIRModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">InfoSIRModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;SIR information-spreading model driven by graph edge probabilities.</span>
 
 <span class="sd">    Uses the full edge-probability machinery from the graph object (rather than</span>
@@ -512,21 +512,21 @@
 
 <div class="viewcode-block" id="InfoSIRModel.inicialization">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent initialiser (no extra setup needed).&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">inicialization</span><span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="InfoSIRModel.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent time-series setup.&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">setup_series_and_time_keeping</span><span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="InfoSIRModel.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily infection checks.</span>
 
 <span class="sd">        Args:</span>
@@ -543,7 +543,7 @@
 
 <div class="viewcode-block" id="InfoSIRModel.prob_of_contact">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.prob_of_contact">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source_state</span><span class="p">,</span> <span class="n">dest_state</span><span class="p">,</span> <span class="n">beta</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute per-node exposure probability using edge probabilities and intensities.</span>
 
 <span class="sd">        Activates edges stochastically using the graph&#39;s edge-probability</span>
@@ -639,7 +639,7 @@
 
 <div class="viewcode-block" id="InfoSIRModel.daily_update">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily infection check for susceptible nodes.</span>
 
 <span class="sd">        Calls :meth:`prob_of_contact` and schedules exposed S nodes to move</span>
@@ -680,7 +680,7 @@
 
 <div class="viewcode-block" id="InfoSIRModel.update_plan">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for InfoSIRModel nodes.</span>
 
 <span class="sd">        * S: no scheduled transition; flagged for daily checks.</span>
@@ -712,7 +712,7 @@
 
 <div class="viewcode-block" id="InfoSIRModel.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoSIRModel.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Delegate to parent run_iteration (no extra logic needed).&quot;&quot;&quot;</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">run_iteration</span><span class="p">()</span></div>
 </div>
@@ -721,7 +721,7 @@
  
 <div class="viewcode-block" id="InfoTippingModel">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">InfoTippingModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">InfoTippingModel</span><span class="p">(</span><span class="n">SimulationEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Threshold-based (tipping-point) adoption model on a contact network.</span>
 
 <span class="sd">    An agent adopts (S → ACTIVE) when the weighted fraction of its active</span>
@@ -761,7 +761,7 @@
 
 <div class="viewcode-block" id="InfoTippingModel.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise counts and flag S nodes for daily tipping checks.</span>
 
 <span class="sd">        Args:</span>
@@ -776,7 +776,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">update_plan</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_nodes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">))</span></div>
 
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_transmission</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_transmission</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a boolean bitmap of nodes that tip (S → ACTIVE) today.</span>
 
 <span class="sd">        For each S node, activates edges stochastically, counts the weighted</span>
@@ -831,7 +831,7 @@
 
 <div class="viewcode-block" id="InfoTippingModel.daily_update">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily tipping check: activate nodes whose threshold is met.</span>
 
 <span class="sd">        Calls :meth:`_transmission` and schedules newly tipping nodes to</span>
@@ -859,7 +859,7 @@
 
 <div class="viewcode-block" id="InfoTippingModel.update_plan">
 <a class="viewcode-back" href="../src_modules.html#agent_info_models.InfoTippingModel.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set transition plans for InfoTippingModel nodes.</span>
 
 <span class="sd">        * S: no scheduled transition; flagged for daily tipping checks.</span>
@@ -890,7 +890,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -900,7 +900,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>simulation_engine &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>simulation_engine</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -38,15 +38,15 @@
 <span class="sd">attempts).</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseEngine</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">global_configs</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">models.engine</span> <span class="kn">import</span> <span class="n">BaseEngine</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">import</span> <span class="nn">utils.global_configs</span> <span class="k">as</span> <span class="nn">global_configs</span>
+<span class="kn">from</span> <span class="nn">utils.global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
 
 
 <span class="n">EXPECTED_NUM_DAYS</span> <span class="o">=</span> <span class="mi">300</span>
@@ -54,7 +54,7 @@
 
 <div class="viewcode-block" id="SimulationEngine">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">SimulationEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">SimulationEngine</span><span class="p">(</span><span class="n">BaseEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Discrete-time plan-based epidemic engine.</span>
 
 <span class="sd">    Each simulated agent (node) carries a *plan*: a countdown</span>
@@ -109,7 +109,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.__init__">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the simulation engine on a contact graph.</span>
 
 <span class="sd">        Args:</span>
@@ -144,7 +144,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.update_graph">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.update_graph">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_G</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_G</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Update the internal graph reference and derived node metadata.</span>
 
 <span class="sd">        Safe to call with ``None`` (no-op).  Updates ``self.graph``,</span>
@@ -169,7 +169,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.inicialization">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise model parameters and build node-index array.</span>
 
 <span class="sd">        Delegates to the parent :meth:`inicialization`, then stores a</span>
@@ -187,7 +187,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.setup_series_and_time_keeping">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.setup_series_and_time_keeping">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">setup_series_and_time_keeping</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Create time-series buffers and per-node tracking arrays.</span>
 
 <span class="sd">        Extends the parent setup with:</span>
@@ -240,7 +240,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.states_and_counts_init">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.states_and_counts_init">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">states_and_counts_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ext_nodes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ext_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise state counts and per-node planning arrays.</span>
 
 <span class="sd">        Extends the parent :meth:`states_and_counts_init` with:</span>
@@ -276,7 +276,7 @@
         
 <div class="viewcode-block" id="SimulationEngine.daily_update">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.daily_update">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">daily_update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform daily per-node checks (e.g. infection attempts).</span>
 
 <span class="sd">        Called once per day for nodes flagged in ``self.need_check``.</span>
@@ -293,7 +293,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.change_states">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.change_states">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">change_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">target_state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">change_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">target_state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Move nodes to their planned (or a forced) target state.</span>
 
 <span class="sd">        Clears the old membership, assigns the new state, updates</span>
@@ -336,7 +336,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.update_plan">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.update_plan">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate new transition plans for nodes that just changed state.</span>
 
 <span class="sd">        Sets ``self.time_to_go`` and ``self.state_to_go`` for each node in</span>
@@ -350,7 +350,7 @@
         <span class="k">pass</span></div>
 
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_get_target_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_get_target_nodes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a bitmap of nodes that are both in *nodes* and in *state*.</span>
 
 <span class="sd">        Args:</span>
@@ -373,7 +373,7 @@
     
 <div class="viewcode-block" id="SimulationEngine.print">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.print">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Print the current calendar day and optionally per-state counts.</span>
 
 <span class="sd">        Args:</span>
@@ -388,7 +388,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.save_durations">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.save_durations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Write per-state duration lists to an open file as CSV rows.</span>
 
 <span class="sd">        Args:</span>
@@ -401,7 +401,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.save_node_states">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.save_node_states">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save the per-node daily state history to a CSV file.</span>
 
 <span class="sd">        If ``global_configs.SAVE_NODES`` is ``False``, logs a warning and</span>
@@ -428,7 +428,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.to_df">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.to_df">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert simulation output to a :class:`pandas.DataFrame`.</span>
 
 <span class="sd">        Extends the parent :meth:`to_df` by adjusting the ``day`` column and</span>
@@ -447,7 +447,7 @@
 
 <div class="viewcode-block" id="SimulationEngine.run">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the plan-based simulation for *T* days.</span>
 
 <span class="sd">        Iterates over days 1..T, calling :meth:`run_iteration` each day and</span>
@@ -522,7 +522,7 @@
     
 <div class="viewcode-block" id="SimulationEngine.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#simulation_engine.SimulationEngine.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one day of plan-based simulation.</span>
 
 <span class="sd">        Steps performed each day:</span>
@@ -581,7 +581,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -591,7 +591,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

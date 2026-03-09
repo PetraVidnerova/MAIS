@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>customised_policy &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>customised_policy</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -42,17 +42,17 @@
 <span class="sd">* Dynamic start/stop of sub-policies loaded by name.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span><span class="p">,</span> <span class="n">reduce</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span><span class="p">,</span> <span class="n">reduce</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">policies.policy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Policy</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.policy_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_scenario_dict</span>
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">utils.policy_utils</span> <span class="kn">import</span> <span class="n">load_scenario_dict</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_load_dictionary</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_load_dictionary</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a time-indexed dictionary from a JSON or CSV file.</span>
 
 <span class="sd">    JSON files are expected to be objects with string keys (simulation</span>
@@ -81,7 +81,7 @@
 
 <div class="viewcode-block" id="CustomPolicy">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">CustomPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">CustomPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Highly configurable orchestration policy for MAIS simulations.</span>
 
@@ -145,7 +145,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.__init__">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
                  <span class="n">graph</span><span class="p">,</span>
                  <span class="n">model</span><span class="p">,</span>
                  <span class="n">layer_changes_filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
@@ -317,7 +317,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.create_policy">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.create_policy">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">create_policy</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">,</span> <span class="n">object_name</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">create_policy</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">,</span> <span class="n">object_name</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Dynamically import and instantiate a policy class by module and name.</span>
 
 <span class="sd">        Args:</span>
@@ -347,7 +347,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.update_layers">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_layers">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coefs</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coefs</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Update graph layer weights to the provided coefficient values.</span>
 
 <span class="sd">        Args:</span>
@@ -359,7 +359,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.switch_on_superspread">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.switch_on_superspread">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">switch_on_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">switch_on_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Activate the superspreader layer by setting its weight to 1.0.&quot;&quot;&quot;</span>
         <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;DBG Superspreader ON&quot;</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span></div>
@@ -367,7 +367,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.switch_off_superspread">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.switch_off_superspread">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">switch_off_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">switch_off_superspread</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Deactivate the superspreader layer by setting its weight to 0.0.&quot;&quot;&quot;</span>
         <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;DBG Superspreader OFF&quot;</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">layer_weights</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">superspreader_layer</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span></div>
@@ -375,7 +375,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.update_beta">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_beta">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_beta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_beta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Update model beta values based on face-mask compliance (legacy method).</span>
 
 <span class="sd">        Scales non-family beta by ``(1 - reduction_coef1 * masks)`` and</span>
@@ -413,7 +413,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.update_beta2">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_beta2">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_beta2</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">,</span> <span class="n">beta_factors</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_beta2</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">masks</span><span class="p">,</span> <span class="n">beta_factors</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Update model beta values using both face-mask compliance and beta factors.</span>
 
 <span class="sd">        Family beta is reduced by ``(1 - reduction_coef1 * beta_factors)``.</span>
@@ -458,7 +458,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.beta_increase">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.beta_increase">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">beta_increase</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">beta_increase</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Increase all beta values by a factor of 1.5 (mutation simulation).</span>
 
 <span class="sd">        Sets ``mutation_coef`` to 1.5 and scales ``beta``, ``beta_A``,</span>
@@ -481,7 +481,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.update_test_rate">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_test_rate">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_test_rate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_test_rate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Scale the testing rate (theta_Is) by a given coefficient.</span>
 
 <span class="sd">        Args:</span>
@@ -496,7 +496,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.update_theta">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.update_theta">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">update_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">update_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">coef</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Scale the symptomatic testing probability (theta_Is) by a coefficient.</span>
 
 <span class="sd">        Args:</span>
@@ -518,7 +518,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.run">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the custom policy.</span>
 
 <span class="sd">        Processes all registered calendars in order:</span>
@@ -647,7 +647,7 @@
 
 <div class="viewcode-block" id="CustomPolicy.to_df">
 <a class="viewcode-back" href="../src_modules.html#customised_policy.CustomPolicy.to_df">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Merge and return DataFrames from all active sub-policies.</span>
 
 <span class="sd">        Returns:</span>
@@ -673,7 +673,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -683,7 +683,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

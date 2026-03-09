@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>engine_sequential &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>engine_sequential</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -39,17 +39,17 @@
 <span class="sd">:func:`_searchsorted2d` used for vectorised roulette-wheel selection.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">scipy</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.integrate</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">gc</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="k">as</span> <span class="nn">scipy</span>
+<span class="kn">import</span> <span class="nn">scipy.integrate</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">gc</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.engine_seirspluslike</span><span class="w"> </span><span class="kn">import</span> <span class="n">SeirsPlusLikeEngine</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span><span class="p">,</span> <span class="n">TransitionHistory</span>
+<span class="kn">from</span> <span class="nn">models.engine_seirspluslike</span> <span class="kn">import</span> <span class="n">SeirsPlusLikeEngine</span>
 <span class="c1"># from extended_network_model import STATES as s</span>
 
 <span class="c1"># [S SS E In Ia Ids Js Jn Ed Ida 0 0 0 0 0 0 0 0]</span>
@@ -57,7 +57,7 @@
 
 <div class="viewcode-block" id="STATES">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.STATES">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">STATES</span><span class="p">():</span>
+<span class="k">class</span> <span class="nc">STATES</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Extended integer state codes used by :class:`SequentialEngine` models.</span>
 
 <span class="sd">    Attributes:</span>
@@ -103,7 +103,7 @@
 
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_searchsorted2d</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_searchsorted2d</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Vectorised row-wise ``numpy.searchsorted``.</span>
 
 <span class="sd">    For each row *i*, finds the insertion position of ``b[i]`` in ``a[i]``.</span>
@@ -126,7 +126,7 @@
 
 <div class="viewcode-block" id="SequentialEngine">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">SequentialEngine</span><span class="p">(</span><span class="n">SeirsPlusLikeEngine</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">SequentialEngine</span><span class="p">(</span><span class="n">SeirsPlusLikeEngine</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Discrete daily-step engine (roulette-wheel selection over propensities).</span>
 
 <span class="sd">    Replaces the continuous-time Gillespie loop of</span>
@@ -142,7 +142,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.inicialization">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.inicialization">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">inicialization</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the sequential engine and allocate the testable array.</span>
 
 <span class="sd">        Calls the parent :meth:`inicialization`, then creates</span>
@@ -156,7 +156,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.run_iteration">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.run_iteration">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run_iteration</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform one day of simulation: compute propensities and update states.</span>
 
 <span class="sd">        For every node draws a uniform random number and selects its next state</span>
@@ -377,7 +377,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.run">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="n">print_interval</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run the simulation for *T* days with daily-step updates.</span>
 
 <span class="sd">        Iterates over days 1..T calling :meth:`run_iteration` each day.</span>
@@ -489,7 +489,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.increase_data_series_length">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.increase_data_series_length">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">increase_data_series_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend all daily time-series buffers by 100 entries.</span>
 
 <span class="sd">        Called automatically when the pre-allocated storage is exhausted.</span>
@@ -510,7 +510,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.increase_history_len">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.increase_history_len">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">increase_history_len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">increase_history_len</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend the event-history and time-series buffers.</span>
 
 <span class="sd">        Enlarges ``self.tseries`` and ``self.history`` by</span>
@@ -522,7 +522,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.finalize_data_series">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.finalize_data_series">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">finalize_data_series</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Trim all time-series to the actually consumed length.</span>
 
 <span class="sd">        Calls ``finalize(self.t)`` on every daily</span>
@@ -547,7 +547,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.current_state_count">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.current_state_count">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the count of nodes in *state* at the current day.</span>
 
 <span class="sd">        Overrides the parent method: uses ``self.t`` (day index) rather than</span>
@@ -564,7 +564,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.current_N">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.current_N">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">current_N</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the effective population size on the current day.</span>
 
 <span class="sd">        Overrides the parent method: uses ``self.t`` rather than</span>
@@ -578,7 +578,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.get_state_count">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.get_state_count">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_state_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return per-day count time-series for a given state or all states.</span>
 
 <span class="sd">        Args:</span>
@@ -596,7 +596,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.to_df">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.to_df">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert simulation output to a :class:`pandas.DataFrame`.</span>
 
 <span class="sd">        Extends the parent :meth:`to_df` with additional test-related columns:</span>
@@ -643,7 +643,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.save_durations">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.save_durations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save_durations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Write per-state duration lists to an open file as CSV rows.</span>
 
 <span class="sd">        Each row contains the state label followed by comma-separated integer</span>
@@ -659,7 +659,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.save_node_states">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.save_node_states">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">save_node_states</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">filename</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Write the per-node state history to a CSV file.</span>
 
 <span class="sd">        Args:</span>
@@ -676,7 +676,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.move_to_E">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.move_to_E">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_to_E</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_to_E</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly expose *num* susceptible nodes by moving them to state E.</span>
 
 <span class="sd">        Only nodes currently in S or S_s are eligible.  The operation</span>
@@ -706,7 +706,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.move_to_R">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.move_to_R">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">move_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">move_to_R</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Move a specific set of exposed nodes directly to the detected-recovered state.</span>
 
 <span class="sd">        Only nodes currently in state E are supported.</span>
@@ -736,7 +736,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.force_infect">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.force_infect">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">force_infect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">force_infect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Forcibly move a set of nodes to the symptomatic-infectious state I_s.</span>
 
 <span class="sd">        Dead nodes (D_d, D_u) are silently skipped.  All other nodes are</span>
@@ -767,7 +767,7 @@
 
 <div class="viewcode-block" id="SequentialEngine.detected_node">
 <a class="viewcode-back" href="../src_modules.html#engine_sequential.SequentialEngine.detected_node">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">detected_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_number</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">detected_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_number</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Mark a node as detected (positive test) and transition it accordingly.</span>
 
 <span class="sd">        Maps the node&#39;s current undetected state to its detected counterpart</span>
@@ -824,7 +824,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -834,7 +834,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

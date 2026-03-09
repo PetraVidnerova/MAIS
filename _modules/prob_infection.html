@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>prob_infection &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>prob_infection</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -42,18 +42,18 @@
 <span class="sd">and :func:`get_relevant_edges` are used internally by both entry points.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy_indexed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">npi</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">numpy_indexed</span> <span class="k">as</span> <span class="nn">npi</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.states</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span> <span class="nn">models.states</span> <span class="kn">import</span> <span class="n">STATES</span>
 
 
 <div class="viewcode-block" id="select_active_edges">
 <a class="viewcode-back" href="../src_modules.html#prob_infection.select_active_edges">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">select_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">select_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Stochastically select active (contact) edges between two node sets.</span>
 
 <span class="sd">    For each edge connecting a node in *source_candidate_states* to a node in</span>
@@ -135,7 +135,7 @@
 
 <div class="viewcode-block" id="archive_active_edges">
 <a class="viewcode-back" href="../src_modules.html#prob_infection.archive_active_edges">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">archive_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">archive_active_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Record today&#39;s active edges in the model&#39;s contact-history buffer.</span>
 
 <span class="sd">    Retrieves source and destination node indices for each active edge and</span>
@@ -178,7 +178,7 @@
 
 <div class="viewcode-block" id="get_relevant_edges">
 <a class="viewcode-back" href="../src_modules.html#prob_infection.get_relevant_edges">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">get_relevant_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">get_relevant_edges</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">active_edges</span><span class="p">,</span> <span class="n">active_edges_dirs</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Filter active edges to those connecting relevant source/destination states.</span>
 
 <span class="sd">    From the set of *active_edges* retains only those where the source node is</span>
@@ -244,7 +244,7 @@
 
 <div class="viewcode-block" id="prob_of_contact_old">
 <a class="viewcode-back" href="../src_modules.html#prob_infection.prob_of_contact_old">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact_old</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">prob_of_contact_old</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Legacy implementation of the contact-probability computation (abandoned).</span>
 
 <span class="sd">    Retained for historical reference only.  Prefer :func:`prob_of_contact`.</span>
@@ -382,7 +382,7 @@
 
 <div class="viewcode-block" id="prob_of_contact">
 <a class="viewcode-back" href="../src_modules.html#prob_infection.prob_of_contact">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">prob_of_contact</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">prob_of_contact</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source_states</span><span class="p">,</span> <span class="n">source_candidate_states</span><span class="p">,</span> <span class="n">dest_states</span><span class="p">,</span> <span class="n">dest_candidate_states</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">beta_in_family</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate per-node exposure via stochastic edge activation (production).</span>
 
 <span class="sd">    For each graph edge, independently activates it with the edge&#39;s daily</span>
@@ -526,7 +526,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -536,7 +536,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>romeo_juliet_graph_gen &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>romeo_juliet_graph_gen</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -46,15 +46,15 @@
 <span class="sd">&quot;&quot;&quot;</span>
 
 <span class="c1"># from graphviz import Graph</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">graph_gen</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphGenerator</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">networkx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nx</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.stats</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">stats</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span> <span class="nn">graph_gen</span> <span class="kn">import</span> <span class="n">GraphGenerator</span>
+<span class="kn">import</span> <span class="nn">networkx</span> <span class="k">as</span> <span class="nn">nx</span>
+<span class="kn">import</span> <span class="nn">scipy.stats</span> <span class="k">as</span> <span class="nn">stats</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 
 
 <div class="viewcode-block" id="RomeoAndJuliet">
 <a class="viewcode-back" href="../src_modules.html#romeo_juliet_graph_gen.RomeoAndJuliet">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">RomeoAndJuliet</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">RomeoAndJuliet</span><span class="p">(</span><span class="n">GraphGenerator</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Handcrafted multi-layer contact graph of the Romeo and Juliet cast.</span>
 
 <span class="sd">    Encodes the social network of all named characters (35 nodes) across</span>
@@ -88,7 +88,7 @@
                    <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span> <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span> <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span> <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span>
                    <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span> <span class="s1">&#39;not in Verona&#39;</span><span class="p">,</span> <span class="s1">&#39;friends&#39;</span><span class="p">,</span> <span class="s1">&#39;work&#39;</span><span class="p">,</span> <span class="s1">&#39;work to clients&#39;</span><span class="p">,</span> <span class="s1">&#39;public transport&#39;</span><span class="p">,</span> <span class="s1">&#39;shops and events&#39;</span><span class="p">]</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
 
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">graph</span><span class="p">[</span><span class="s1">&#39;layer_probs&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer_probs</span>
@@ -467,7 +467,7 @@
 
 <div class="viewcode-block" id="RomeoAndJuliet.write_to_csv">
 <a class="viewcode-back" href="../src_modules.html#romeo_juliet_graph_gen.RomeoAndJuliet.write_to_csv">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">write_to_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s1">&#39;raj&#39;</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">write_to_csv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s1">&#39;raj&#39;</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Export the graph to three CSV files (edges, nodes, layer types).</span>
 
 <span class="sd">        The three output files are named:</span>
@@ -502,7 +502,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -512,7 +512,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

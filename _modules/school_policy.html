@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>school_policy &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>school_policy</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -51,25 +51,25 @@
 
 <span class="c1"># NOTE: this policy is intended to be run with a special graph for schools!!!!</span>
 <span class="c1"># Do not use it for normal graphs (hodoninsko, lounsko, papertown, etc).</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">global_configs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cfgs</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">global_configs</span><span class="w"> </span><span class="kn">import</span> <span class="n">monitor</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">depo</span><span class="w"> </span><span class="kn">import</span> <span class="n">Depo</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">policies.policy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Policy</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.history_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimeSeries</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">global_configs</span> <span class="k">as</span> <span class="nn">cfgs</span>
+<span class="kn">from</span> <span class="nn">global_configs</span> <span class="kn">import</span> <span class="n">monitor</span>
+<span class="kn">from</span> <span class="nn">depo</span> <span class="kn">import</span> <span class="n">Depo</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">from</span> <span class="nn">policies.policy</span> <span class="kn">import</span> <span class="n">Policy</span>
+<span class="kn">from</span> <span class="nn">utils.history_utils</span> <span class="kn">import</span> <span class="n">TimeSeries</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.agent_based_network_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">STATES</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.graph_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">compute_mean_degree</span>
+<span class="kn">from</span> <span class="nn">models.agent_based_network_model</span> <span class="kn">import</span> <span class="n">STATES</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span>
+<span class="kn">from</span> <span class="nn">utils.graph_utils</span> <span class="kn">import</span> <span class="n">compute_mean_degree</span>
 
 <span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span><span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">DEBUG</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="BasicSchoolPolicy">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">BasicSchoolPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">BasicSchoolPolicy</span><span class="p">(</span><span class="n">Policy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Policy that manages school-day / weekend toggling and optional testing.</span>
 
@@ -99,7 +99,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.__init__">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">config_obj</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">config_obj</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the basic school policy.</span>
 
 <span class="sd">        Args:</span>
@@ -168,7 +168,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.nodes_to_quarantine">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.nodes_to_quarantine">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">nodes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Remove nodes from school by switching off their school-layer edges.</span>
 
 <span class="sd">        Sets ``at_school[nodes]`` to ``False`` and turns off all edges</span>
@@ -190,7 +190,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.nodes_from_quarantine">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.nodes_from_quarantine">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">nodes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return nodes to school by switching on their school-layer edges.</span>
 
 <span class="sd">        Sets ``at_school[nodes]`` to ``True`` and restores all edges on</span>
@@ -214,7 +214,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.first_day_setup">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.first_day_setup">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Suppress all layers for the warm-up period and initialise statistics.</span>
 
 <span class="sd">        Saves a copy of the initial layer weights, sets all layer</span>
@@ -235,7 +235,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.do_testing">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.do_testing">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">do_testing</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">do_testing</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform antigen testing on configured weekdays and quarantine positives.</span>
 
 <span class="sd">        On test days, identifies students currently at school and</span>
@@ -317,7 +317,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.stop">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.stop">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Signal the policy to stop any new interventions.</span>
 
 <span class="sd">        After calling ``stop``, no new quarantines or school closures</span>
@@ -328,7 +328,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.closing_and_opening">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.closing_and_opening">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Hook for subclasses to implement dynamic school-group opening/closing.</span>
 
 <span class="sd">        Called each time-step after the weekend toggle.  The default</span>
@@ -339,7 +339,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.run">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.run">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute one time-step of the school policy.</span>
 
 <span class="sd">        Handles first-day setup, weekend toggling, warm-up layer</span>
@@ -387,7 +387,7 @@
 
 <div class="viewcode-block" id="BasicSchoolPolicy.to_df">
 <a class="viewcode-back" href="../src_modules.html#school_policy.BasicSchoolPolicy.to_df">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">to_df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a DataFrame with daily school-quarantine statistics.</span>
 
 <span class="sd">        Returns:</span>
@@ -409,7 +409,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">ClosePartPolicy</span><span class="p">(</span><span class="n">BasicSchoolPolicy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">ClosePartPolicy</span><span class="p">(</span><span class="n">BasicSchoolPolicy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;School policy that can close specific classes listed in a config file.</span>
 
@@ -433,7 +433,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy.convert_class">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.convert_class">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">convert_class</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">a</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">convert_class</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">a</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert node class indices to class-name strings.</span>
 
 <span class="sd">        Args:</span>
@@ -450,7 +450,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy.nodes_in_classes">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.nodes_in_classes">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">nodes_in_classes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">nodes_in_classes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return node indices belonging to any of the specified classes.</span>
 
 <span class="sd">        Args:</span>
@@ -467,7 +467,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy.classes_to_quarantine">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.classes_to_quarantine">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">classes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">classes_to_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Send all nodes in the specified classes to quarantine.</span>
 
 <span class="sd">        Marks nodes as not at school and switches off their school-layer</span>
@@ -494,7 +494,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy.classes_from_quarantine">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.classes_from_quarantine">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">classes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">classes_from_quarantine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">list_of_classes</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Release all nodes in the specified classes from quarantine.</span>
 
 <span class="sd">        Marks nodes as at school and switches on their school-layer</span>
@@ -519,7 +519,7 @@
 
 <div class="viewcode-block" id="ClosePartPolicy.first_day_setup">
 <a class="viewcode-back" href="../src_modules.html#school_policy.ClosePartPolicy.first_day_setup">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">first_day_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run parent first-day setup and apply initial class closures from config.</span>
 
 <span class="sd">        Optionally closes teacher edges and quarantines classes listed</span>
@@ -555,7 +555,7 @@
 
 <div class="viewcode-block" id="AlternatingPolicy">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">AlternatingPolicy</span><span class="p">(</span><span class="n">ClosePartPolicy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">AlternatingPolicy</span><span class="p">(</span><span class="n">ClosePartPolicy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;School policy that alternates two groups of classes week by week.</span>
 
@@ -579,7 +579,7 @@
 
 <div class="viewcode-block" id="AlternatingPolicy.__init__">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the alternating policy with group definitions from config.</span>
 
 <span class="sd">        Args:</span>
@@ -639,7 +639,7 @@
 
 <div class="viewcode-block" id="AlternatingPolicy.closing_and_opening">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternatingPolicy.closing_and_opening">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">closing_and_opening</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Alternate active and passive groups at the start of each school week.</span>
 
 <span class="sd">        At ``weekend_end`` the active and passive groups are swapped:</span>
@@ -671,7 +671,7 @@
 
 <div class="viewcode-block" id="AlternateFreeMonday">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternateFreeMonday">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">AlternateFreeMonday</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">AlternateFreeMonday</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Alternating policy where Monday is a free day (school starts Tuesday).</span>
 
@@ -685,7 +685,7 @@
 
 <div class="viewcode-block" id="AlternateFreeMonday.__init__">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternateFreeMonday.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise with Monday as the first school day and no testing.</span>
 
 <span class="sd">        Args:</span>
@@ -704,7 +704,7 @@
 
 <div class="viewcode-block" id="AlternateAndMondayPCR">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternateAndMondayPCR">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">AlternateAndMondayPCR</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">AlternateAndMondayPCR</span><span class="p">(</span><span class="n">AlternatingPolicy</span><span class="p">):</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Alternating policy with high-sensitivity (PCR-equivalent) Monday testing.</span>
 
@@ -719,7 +719,7 @@
 
 <div class="viewcode-block" id="AlternateAndMondayPCR.__init__">
 <a class="viewcode-back" href="../src_modules.html#school_policy.AlternateAndMondayPCR.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">config_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise with Monday testing at 80 % sensitivity.</span>
 
 <span class="sd">        Args:</span>
@@ -740,7 +740,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -750,7 +750,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

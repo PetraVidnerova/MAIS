@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>search_methods &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>search_methods</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -48,20 +48,20 @@
 <span class="sd">``&#39;CMA-ES&#39;``) to the corresponding search function.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cma</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.special</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">multiprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Pool</span>
+<span class="kn">import</span> <span class="nn">cma</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy.special</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="kn">import</span> <span class="n">Pool</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">cma.optimization_tools</span><span class="w"> </span><span class="kn">import</span> <span class="n">EvalParallel2</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.model_selection</span><span class="w"> </span><span class="kn">import</span> <span class="n">ParameterGrid</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">gc</span>
+<span class="kn">from</span> <span class="nn">cma.optimization_tools</span> <span class="kn">import</span> <span class="n">EvalParallel2</span>
+<span class="kn">from</span> <span class="nn">sklearn.model_selection</span> <span class="kn">import</span> <span class="n">ParameterGrid</span>
+<span class="kn">import</span> <span class="nn">gc</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_run_model_with_hyperparams</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparams</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_run_model_with_hyperparams</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparams</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate ``model_func`` with a specific hyperparameter dict and log the result.</span>
 
 <span class="sd">    Args:</span>
@@ -89,7 +89,7 @@
 
 <div class="viewcode-block" id="perform_gridsearch">
 <a class="viewcode-back" href="../src_modules.html#search_methods.perform_gridsearch">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">perform_gridsearch</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">perform_gridsearch</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Exhaustively evaluate all parameter combinations defined in ``hyperparam_config``.</span>
 
 <span class="sd">    Builds a Cartesian product of the discrete parameter values listed under</span>
@@ -127,7 +127,7 @@
 
 <div class="viewcode-block" id="evaluate_with_params">
 <a class="viewcode-back" href="../src_modules.html#search_methods.evaluate_with_params">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">evaluate_with_params</span><span class="p">(</span><span class="n">param_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">model_func</span><span class="p">,</span> <span class="n">param_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">evaluate_with_params</span><span class="p">(</span><span class="n">param_array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">model_func</span><span class="p">,</span> <span class="n">param_keys</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Evaluate ``model_func`` using a raw (sigmoid-encoded) parameter array.</span>
 
 <span class="sd">    Decodes ``param_array`` from the internal CMA-ES representation (applying</span>
@@ -161,7 +161,7 @@
 
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_keys_with_evolved_vals</span><span class="p">(</span><span class="n">evolved_vals</span><span class="p">,</span> <span class="n">keys</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_keys_with_evolved_vals</span><span class="p">(</span><span class="n">evolved_vals</span><span class="p">,</span> <span class="n">keys</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Zip parameter keys and values into a dictionary.</span>
 
 <span class="sd">    Args:</span>
@@ -175,7 +175,7 @@
     <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span> <span class="n">evolved_vals</span><span class="p">)}</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_init_output_file</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">header</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_init_output_file</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">header</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Create or overwrite the CSV log file and write its header row.</span>
 
 <span class="sd">    If ``output_file`` is ``None`` the function is a no-op.</span>
@@ -192,7 +192,7 @@
             <span class="n">of</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;gen,</span><span class="si">{</span><span class="n">key_string</span><span class="si">}</span><span class="s2">,fitness</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_log_inidividual</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">fitness</span><span class="p">,</span> <span class="n">gen</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_log_inidividual</span><span class="p">(</span><span class="n">output_file</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">fitness</span><span class="p">,</span> <span class="n">gen</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Append one individual&#39;s evaluation record to the CSV log file.</span>
 
 <span class="sd">    If ``output_file`` is ``None`` the function is a no-op.</span>
@@ -210,7 +210,7 @@
             <span class="n">of</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">gen</span><span class="si">}</span><span class="s1">,</span><span class="si">{</span><span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">x</span><span class="p">)</span><span class="si">}</span><span class="s1">,</span><span class="si">{</span><span class="n">fitness</span><span class="si">}</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>  <span class="c1"># joined hyperparam values and fitness</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_inverse_sigmoid</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_inverse_sigmoid</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the logit (inverse-sigmoid) function element-wise to ``x``.</span>
 
 <span class="sd">    Values are clamped to ``[eps, 1 - eps]`` (where ``eps`` is</span>
@@ -227,7 +227,7 @@
     <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">x</span><span class="o">/</span><span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">x</span><span class="p">))</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_init_values</span><span class="p">(</span><span class="n">value_dict</span><span class="p">,</span> <span class="n">ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_init_values</span><span class="p">(</span><span class="n">value_dict</span><span class="p">,</span> <span class="n">ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert initial parameter values to the internal CMA-ES search space.</span>
 
 <span class="sd">    Parameters that have defined bounds in ``ranges`` are first linearly scaled</span>
@@ -258,7 +258,7 @@
         <span class="n">initial_vals</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value_dict</span><span class="o">.</span><span class="n">values</span><span class="p">()])</span>
         <span class="k">return</span> <span class="n">_inverse_sigmoid</span><span class="p">(</span><span class="n">initial_vals</span><span class="p">)</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">scale</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">lower</span><span class="p">,</span> <span class="n">upper</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">lower</span><span class="p">,</span> <span class="n">upper</span><span class="p">):</span>
         <span class="k">return</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">lower</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">upper</span> <span class="o">-</span> <span class="n">lower</span><span class="p">)</span>
 
     <span class="n">res_keys</span> <span class="o">=</span> <span class="p">[]</span>
@@ -280,7 +280,7 @@
     <span class="k">return</span> <span class="n">res_keys</span><span class="p">,</span> <span class="n">_inverse_sigmoid</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">res_vals</span><span class="p">))</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_compile_individual</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">param_keys</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">with_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_compile_individual</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">param_keys</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">param_ranges</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">with_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Decode an individual from the CMA-ES search space to human-readable values.</span>
 
 <span class="sd">    Applies the sigmoid function and, where ``param_ranges`` are provided,</span>
@@ -302,7 +302,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        dict or list: Decoded parameter values.  Type depends on ``with_keys``.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">scale_back</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">scale_back</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
         <span class="n">val</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">special</span><span class="o">.</span><span class="n">expit</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
         <span class="n">low</span><span class="p">,</span> <span class="n">up</span> <span class="o">=</span> <span class="n">param_ranges</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
         <span class="k">return</span> <span class="n">val</span> <span class="o">*</span> <span class="p">(</span><span class="n">up</span> <span class="o">-</span> <span class="n">low</span><span class="p">)</span> <span class="o">+</span> <span class="n">low</span>
@@ -321,7 +321,7 @@
 
 <div class="viewcode-block" id="cma_es">
 <a class="viewcode-back" href="../src_modules.html#search_methods.cma_es">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">cma_es</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">return_only_best</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">cma_es</span><span class="p">(</span><span class="n">model_func</span><span class="p">,</span> <span class="n">hyperparam_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">return_only_best</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Optimise model hyperparameters using CMA-ES (Covariance Matrix Adaptation Evolution Strategy).</span>
 
 <span class="sd">    Uses the ``cma`` library to iteratively propose candidate parameter</span>
@@ -424,7 +424,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -434,7 +434,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

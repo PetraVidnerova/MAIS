@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>depo &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>depo</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -36,12 +36,12 @@
 <span class="sd">expires.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
 <div class="viewcode-block" id="Depo">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">Depo</span><span class="p">:</span>
+<span class="k">class</span> <span class="nc">Depo</span><span class="p">:</span>
 
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Deposit object for holding nodes for a fixed number of time-steps.</span>
 
@@ -57,7 +57,7 @@
 
 <div class="viewcode-block" id="Depo.__init__">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialise the deposit with a counter array of zeros.</span>
 
 <span class="sd">        Args:</span>
@@ -67,7 +67,7 @@
 
 
     <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">num_of_prisoners</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">num_of_prisoners</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the number of nodes currently held in the deposit.</span>
 
 <span class="sd">        Returns:</span>
@@ -77,7 +77,7 @@
 
 <div class="viewcode-block" id="Depo.lock_up">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.lock_up">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">lock_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">lock_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nodes</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span> <span class="n">check_duplicate</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Place nodes into the deposit for a given duration.</span>
 
 <span class="sd">        Args:</span>
@@ -110,7 +110,7 @@
 
 <div class="viewcode-block" id="Depo.filter_locked">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.filter_locked">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">filter_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">filter_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the subset of candidates that are not yet in the deposit.</span>
 
 <span class="sd">        Args:</span>
@@ -129,7 +129,7 @@
 
 <div class="viewcode-block" id="Depo.filter_locked_bitmap">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.filter_locked_bitmap">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">filter_locked_bitmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">filter_locked_bitmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a boolean mask indicating which candidates are not in the deposit.</span>
 
 <span class="sd">        Args:</span>
@@ -146,7 +146,7 @@
 
 <div class="viewcode-block" id="Depo.tick_and_get_released">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.tick_and_get_released">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">tick_and_get_released</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">tick_and_get_released</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Advance the deposit by one time-step and return newly released nodes.</span>
 
 <span class="sd">        Decrements all non-zero counters by one.  Nodes whose counter</span>
@@ -163,7 +163,7 @@
 
 <div class="viewcode-block" id="Depo.is_locked">
 <a class="viewcode-back" href="../src_modules.html#depo.Depo.is_locked">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">is_locked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node_id</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Check whether a single node is currently held in the deposit.</span>
 
 <span class="sd">        Args:</span>
@@ -179,7 +179,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -189,7 +189,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

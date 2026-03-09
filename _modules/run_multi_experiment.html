@@ -5,11 +5,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>run_multi_experiment &#8212; MAIS  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=47202671" />
-    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=fce32b03" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=f63d8bfa" />
+    <link rel="stylesheet" type="text/css" href="../_static/haiku.css?v=e491ac2d" />
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" /> 
   </head><body>
@@ -17,7 +17,7 @@
           <span>MAIS  documentation</span></a></h1>
         <h2 class="heading"><span>run_multi_experiment</span></h2>
       </div>
-      <div class="topnav" role="navigation" aria-label="Top">
+      <div class="topnav" role="navigation" aria-label="top navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -44,32 +44,32 @@
 <span class="sd">config&#39;s ``[TASK]`` section.</span>
 <span class="sd">&quot;&quot;&quot;</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">zipfile</span><span class="w"> </span><span class="kn">import</span> <span class="n">ZipFile</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">click</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">timeit</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">io</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">zipfile</span> <span class="kn">import</span> <span class="n">ZipFile</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">copy</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">click</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">timeit</span>
+<span class="kn">import</span> <span class="nn">io</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">logging</span>
 
 <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s1">&#39;../src/&#39;</span><span class="p">))</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.config_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigFile</span><span class="p">,</span> <span class="n">ConfigFileGenerator</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">graphs.graph_gen</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphGenerator</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.model_zoo</span><span class="w"> </span><span class="kn">import</span> <span class="n">model_zoo</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">model_m.model_m</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelM</span><span class="p">,</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">utils.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">Pool</span>
+<span class="kn">from</span> <span class="nn">utils.config_utils</span> <span class="kn">import</span> <span class="n">ConfigFile</span><span class="p">,</span> <span class="n">ConfigFileGenerator</span>
+<span class="kn">from</span> <span class="nn">graphs.graph_gen</span> <span class="kn">import</span> <span class="n">GraphGenerator</span>
+<span class="kn">from</span> <span class="nn">models.model_zoo</span> <span class="kn">import</span> <span class="n">model_zoo</span>
+<span class="kn">from</span> <span class="nn">model_m.model_m</span> <span class="kn">import</span> <span class="n">ModelM</span><span class="p">,</span> <span class="n">load_model_from_config</span><span class="p">,</span> <span class="n">load_graph</span>
+<span class="kn">from</span> <span class="nn">utils.pool</span> <span class="kn">import</span> <span class="n">Pool</span>
 
 
 <div class="viewcode-block" id="evaluate_model">
 <a class="viewcode-back" href="../scripts.html#run_multi_experiment.evaluate_model">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">evaluate_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">setup</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">evaluate_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">setup</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one replicate of the model and return its results.</span>
 
 <span class="sd">    This function is designed to be called by a worker process inside</span>
@@ -122,8 +122,8 @@
         <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-            <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
-            <span class="kn">import</span><span class="w"> </span><span class="nn">traceback</span>
+            <span class="kn">import</span> <span class="nn">sys</span>
+            <span class="kn">import</span> <span class="nn">traceback</span>
             <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">tb</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">exc_info</span><span class="p">()</span>
             <span class="n">traceback</span><span class="o">.</span><span class="n">print_tb</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>  <span class="c1"># Fixed format</span>
             <span class="n">tb_info</span> <span class="o">=</span> <span class="n">traceback</span><span class="o">.</span><span class="n">extract_tb</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>
@@ -175,7 +175,7 @@
 
 <div class="viewcode-block" id="demo">
 <a class="viewcode-back" href="../scripts.html#run_multi_experiment.demo">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">test_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>  <span class="n">print_interval</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_repeat</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="k">def</span> <span class="nf">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">test_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">model_random_seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>  <span class="n">print_interval</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_repeat</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
          <span class="n">output_type</span><span class="o">=</span><span class="s2">&quot;ZIP&quot;</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run many parallel epidemic model replicates and aggregate their output.</span>
 
@@ -247,7 +247,7 @@
     <span class="n">i</span> <span class="o">=</span> <span class="n">n_jobs</span>
     <span class="n">answers</span> <span class="o">=</span> <span class="mi">0</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_process_answer</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">ser</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_process_answer</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">ser</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">output_type</span> <span class="o">==</span> <span class="s2">&quot;FEATHER&quot;</span><span class="p">:</span>
             <span class="n">result_dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
             <span class="n">result_series</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ser</span><span class="p">)</span>
@@ -305,7 +305,7 @@
 
 <div class="viewcode-block" id="save_to_zipped_csv">
 <a class="viewcode-back" href="../scripts.html#run_multi_experiment.save_to_zipped_csv">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">save_to_zipped_csv</span><span class="p">(</span><span class="n">test_id</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">,</span> <span class="n">zipname</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">save_to_zipped_csv</span><span class="p">(</span><span class="n">test_id</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">random_seed</span><span class="p">,</span> <span class="n">suffix</span><span class="p">,</span> <span class="n">zipname</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Append a single replicate&#39;s result DataFrame to a shared ZIP archive.</span>
 
 <span class="sd">    The CSV content is preceded by the configuration file text (each line</span>
@@ -358,7 +358,7 @@
 <span class="nd">@click</span><span class="o">.</span><span class="n">option</span><span class="p">(</span><span class="s1">&#39;--output_type&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;ZIP&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;ZIP or FEATHER. ZIP produces `n_repeat` output csv files in one zip archive. FEATHER produces one big data frame in feather file.&quot;</span><span class="p">)</span>
 <span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;filename&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;example.ini&quot;</span><span class="p">)</span>
 <span class="nd">@click</span><span class="o">.</span><span class="n">argument</span><span class="p">(</span><span class="s1">&#39;test_id&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">test</span><span class="p">(</span><span class="n">const_random_seed</span><span class="p">,</span>  <span class="n">user_random_seeds</span><span class="p">,</span>  <span class="n">print_interval</span><span class="p">,</span> <span class="n">n_repeat</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">log_level</span><span class="p">,</span> <span class="n">output_type</span><span class="p">,</span>
+<span class="k">def</span> <span class="nf">test</span><span class="p">(</span><span class="n">const_random_seed</span><span class="p">,</span>  <span class="n">user_random_seeds</span><span class="p">,</span>  <span class="n">print_interval</span><span class="p">,</span> <span class="n">n_repeat</span><span class="p">,</span> <span class="n">n_jobs</span><span class="p">,</span> <span class="n">log_level</span><span class="p">,</span> <span class="n">output_type</span><span class="p">,</span>
          <span class="n">filename</span><span class="p">,</span> <span class="n">test_id</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot; Run the demo test inside the timeit &quot;&quot;&quot;</span>
 
@@ -384,7 +384,7 @@
 
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running </span><span class="si">{</span><span class="n">test_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-        <span class="k">def</span><span class="w"> </span><span class="nf">demo_fce</span><span class="p">():</span> <span class="k">return</span> <span class="n">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">my_id</span><span class="p">,</span>
+        <span class="k">def</span> <span class="nf">demo_fce</span><span class="p">():</span> <span class="k">return</span> <span class="n">demo</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">my_id</span><span class="p">,</span>
                                     <span class="n">model_random_seed</span><span class="o">=</span><span class="n">random_seed</span><span class="p">,</span>  <span class="n">print_interval</span><span class="o">=</span><span class="n">print_interval</span><span class="p">,</span>
                                     <span class="n">n_repeat</span><span class="o">=</span><span class="n">n_repeat</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="n">n_jobs</span><span class="p">,</span>
                                     <span class="n">output_type</span><span class="o">=</span><span class="n">output_type</span><span class="p">)</span>
@@ -396,7 +396,7 @@
 </pre></div>
 
       </div>
-      <div class="bottomnav" role="navigation" aria-label="Bottom">
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
       
         <p>
         <a class="uplink" href="../index.html">Contents</a>
@@ -406,7 +406,7 @@
 
     <div class="footer" role="contentinfo">
     &#169; Copyright 2026, MAIS Team.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>
