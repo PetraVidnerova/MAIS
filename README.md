@@ -407,7 +407,7 @@ If you use MAIS in your research, please cite:
   author    = {Bakoš, Martin and Neruda, Roman and Kadlecová, Gabriela and Šlerka, Josef and Tuček, Vít and Vidnerová, Petra},
   title     = {{MAIS}: Multi-Agent Information/Infection Spread Model},
   year      = {2026},
-  doi       = {10.5281/zenodo.16421566},
+  doi       = {10.5281/zenodo.16421565},
   url       = {https://github.com/PetraVidnerova/MAIS}
 }
 ```
